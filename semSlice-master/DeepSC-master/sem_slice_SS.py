@@ -1,4 +1,6 @@
 import os
+os.environ['TF_KERAS'] = '1'  # 必须在所有 import 之前设置
+import os
 import random
 import json
 import torch
@@ -14,8 +16,8 @@ from tqdm import tqdm
 from sklearn.preprocessing import normalize
 from tensorflow import keras
 from bert4keras.backend import keras
-from bert4keras.bert import build_bert_model 
-from bert4keras.tokenizer import Tokenizer 
+from bert4keras.models import build_transformer_model as build_bert_model
+from bert4keras.tokenizers import Tokenizer
 from w3lib.html import remove_tags
 
 from utils import *
@@ -38,40 +40,40 @@ logging.getLogger("bert4keras").setLevel(logging.ERROR)
 parser = argparse.ArgumentParser()
 
 
-parser.add_argument('--checkpoint-path_1', default='checkpoints/1201/deepsc-AWGN-enorigin_layer3', type=str)
-parser.add_argument('--checkpoint-path_2', default='checkpoints/1201/deepsc-AWGN-en90%_layer3', type=str)
-parser.add_argument('--checkpoint-path_3', default='checkpoints/1201/deepsc-AWGN-en80%_layer3', type=str)
+parser.add_argument('--checkpoint-path_1', default='checkpoint/deepsc-AWGN-enorigin_layer3', type=str)
+parser.add_argument('--checkpoint-path_2', default='checkpoint/deepsc-AWGN-en90%_layer3', type=str)
+parser.add_argument('--checkpoint-path_3', default='checkpoint/deepsc-AWGN-en80%_layer3', type=str)
 
 
 
-parser.add_argument('--task_1_vocab', default='./europarl/vocab_en.json', type=str)
-parser.add_argument('--task_2_vocab', default='./europarl/vocab_en.json', type=str)
-parser.add_argument('--task_3_vocab', default='./europarl/vocab_en.json', type=str)
-parser.add_argument('--task_4_vocab', default='./europarl/vocab_en.json', type=str)
-parser.add_argument('--task_5_vocab', default='./europarl/vocab_en90%.json', type=str)
-parser.add_argument('--task_6_vocab', default='./europarl/vocab_en90%.json', type=str)
-parser.add_argument('--task_7_vocab', default='./europarl/vocab_en90%.json', type=str)
-parser.add_argument('--task_8_vocab', default='./europarl/vocab_en80%.json', type=str)
-parser.add_argument('--task_9_vocab', default='./europarl/vocab_en80%.json', type=str)
-parser.add_argument('--task_10_vocab', default='./europarl/vocab_en80%.json', type=str)
+parser.add_argument('--task_1_vocab', default='checkpoint/vocab_en.json', type=str)
+parser.add_argument('--task_2_vocab', default='checkpoint/vocab_en.json', type=str)
+parser.add_argument('--task_3_vocab', default='checkpoint/vocab_en.json', type=str)
+parser.add_argument('--task_4_vocab', default='checkpoint/vocab_en.json', type=str)
+parser.add_argument('--task_5_vocab', default='checkpoint/vocab_en90%.json', type=str)
+parser.add_argument('--task_6_vocab', default='checkpoint/vocab_en90%.json', type=str)
+parser.add_argument('--task_7_vocab', default='checkpoint/vocab_en90%.json', type=str)
+parser.add_argument('--task_8_vocab', default='checkpoint/vocab_en80%.json', type=str)
+parser.add_argument('--task_9_vocab', default='checkpoint/vocab_en80%.json', type=str)
+parser.add_argument('--task_10_vocab', default='checkpoint/vocab_en80%.json', type=str)
 
 
-parser.add_argument('--task_1', default='./europarl/test_data_en.pkl', type=str)
-parser.add_argument('--task_2', default='./europarl/test_data_en.pkl', type=str)
-parser.add_argument('--task_3', default='./europarl/test_data_en.pkl', type=str)
-parser.add_argument('--task_4', default='./europarl/test_data_en.pkl', type=str)
+parser.add_argument('--task_1', default='./checkpoint/test_data_en.pkl', type=str)
+parser.add_argument('--task_2', default='./checkpoint/test_data_en.pkl', type=str)
+parser.add_argument('--task_3', default='./checkpoint/test_data_en.pkl', type=str)
+parser.add_argument('--task_4', default='./checkpoint/test_data_en.pkl', type=str)
 
-parser.add_argument('--task_5', default='./europarl/test_data-en90%.pkl', type=str)
-parser.add_argument('--task_6', default='./europarl/test_data-en90%.pkl', type=str)
-parser.add_argument('--task_7', default='./europarl/test_data-en90%.pkl', type=str)
-
-
-parser.add_argument('--task_8', default='./europarl/test_data-en80%.pkl', type=str)
-parser.add_argument('--task_9', default='./europarl/test_data-en80%.pkl', type=str)
-parser.add_argument('--task_10', default='./europarl/test_data-en80%.pkl', type=str)
+parser.add_argument('--task_5', default='./checkpoint/test_data-en90%.pkl', type=str)
+parser.add_argument('--task_6', default='./checkpoint/test_data-en90%.pkl', type=str)
+parser.add_argument('--task_7', default='./checkpoint/test_data-en90%.pkl', type=str)
 
 
-parser.add_argument('--vocab-file', default='europarl/vocab_en.json', type=str)
+parser.add_argument('--task_8', default='./checkpoint/test_data-en80%.pkl', type=str)
+parser.add_argument('--task_9', default='./checkpoint/test_data-en80%.pkl', type=str)
+parser.add_argument('--task_10', default='./checkpoint/test_data-en80%.pkl', type=str)
+
+
+parser.add_argument('--vocab-file', default='./checkpoint/vocab_en.json', type=str)
 parser.add_argument('--channel', default='AWGN', type=str)
 parser.add_argument('--MAX-LENGTH', default=20, type=int)
 parser.add_argument('--MIN-LENGTH', default=4, type=int)
@@ -90,14 +92,14 @@ parser.add_argument('--sim_threshold',default= 0.6,type = float)
 parser.add_argument('--delay_threshold',default= 0.13,type = float)
 
 
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-tasks_num = 10 
+tasks_num = 3
 slices_num = 3
-k_symbol = 10 
+k_symbol = 10
 
 args = parser.parse_args()
-args.vocab_file = './' + args.vocab_file 
+args.vocab_file = './' + args.vocab_file
 vocab = json.load(open(args.vocab_file, 'rb'))
 token_to_idx = vocab['token_to_idx']
 idx_to_token = dict(zip(token_to_idx.values(), token_to_idx.keys()))
@@ -115,7 +117,7 @@ class Similarity():
         
         self.model1 = build_bert_model(config_path, checkpoint_path, with_pool=True)
         self.model = keras.Model(inputs=self.model1.input,
-                                 outputs=self.model1.get_layer('Encoder-11-FeedForward-Norm').output)
+                                 outputs=self.model1.get_layer('Transformer-11-FeedForward-Norm').output)
 
         self.tokenizer = Tokenizer(dict_path, do_lower_case=True)
         
@@ -242,7 +244,7 @@ def transmit_delay(k,L,B,SNR):
 
 
 def count_duplicate_keys(file2_path): 
-    file1_path = "./europarl/vocab_en.json"
+    file1_path = "./checkpoint/vocab_en.json"
     with open(file1_path, 'r') as f1:
         data1 = json.load(f1)
     with open(file2_path, 'r') as f2:
@@ -303,7 +305,7 @@ def tasks(args):
         
         """获取最新的模型路径并加载权重 """
         latest_model_path = get_latest_model_path(checkpoint_path)
-        checkpoint = torch.load(latest_model_path)
+        checkpoint = torch.load(latest_model_path, map_location=torch.device('cpu'))
         deepsc.load_state_dict(checkpoint)
         
         deepsc_models[slice_idx] = deepsc

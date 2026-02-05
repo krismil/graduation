@@ -55,10 +55,10 @@ from sem_slice_SS import main_compute
 class PSO:
     def __init__(self, dimension, time, size, low, up, v_low, v_high,target_snr):
 
-        self.dimension = dimension  
-        self.time = time  
+        self.dimension = dimension  #6个变量
+        self.time = time  #迭代次数
         self.gen = 0 
-        self.size = size  
+        self.size = size  #粒子数
         self.bound = []  
         self.bound.append(low) 
         self.bound.append(up) 
@@ -230,8 +230,8 @@ class PSO:
  
 if __name__ == '__main__':
 
-    time = 5
-    size = 5
+    time = 3
+    size = 2
     dimension = 6
     v_low = -0.1
     v_high = 0.1
@@ -240,7 +240,7 @@ if __name__ == '__main__':
     up = [0.999, 0.999, 0.999, 1.999, 1.999, 1.999]
     P_total=1 
     B_total=2 
-    target_SNR = -6 
+    target_SNR = 3
 
  
     data_results = [[{} for _ in range(10)] for _ in range(time*size)]

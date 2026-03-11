@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>6G 意图驱动语义切片平台</title>
+    <link rel="stylesheet" href="https://cdn.staticfile.org/element-plus/2.2.0/index.css">
+    <style>
+        body { font-family: 'PingFang SC', sans-serif; background-color: #f0f2f5; margin: 0; padding: 0; height: 100vh; }
+        #app { height: 100%; }
+
+        /* 登录页样式 */
+        .login-container { display: flex; justify-content: center; align-items: center; height: 100vh; background: linear-gradient(135deg, #1890ff 0%, #3f51b5 100%); }
+        .login-box { width: 400px; padding: 40px; background: white; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); text-align: center; }
+        .login-title { font-size: 24px; font-weight: bold; color: #333; margin-bottom: 30px; }
+
+        /* 主面板样式 */
+        .main-layout { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        .header-bar { background: #fff; padding: 0 20px; height: 60px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 8px rgba(0,0,0,0.05); margin-bottom: 20px; border-radius: 8px; }
+        .user-profile { display: flex; align-items: center; gap: 10px; font-size: 14px; color: #606266; }
+        .el-card { border-radius: 8px; margin-bottom: 20px; border: none; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.05); }
+        .intent-box { margin-top: 15px; padding: 12px; background: #fdf6ec; border: 1px solid #faecd8; border-radius: 4px; }
+        .chart-box { width: 100%; margin-top: 15px; border: 1px solid #ebeef5; border-radius: 8px; background: #fff; padding: 10px 0; }
+        #resourceChart { height: 220px; }
+        #mainChart { height: 320px; }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div v-if="!isLoggedIn" class="login-container">
+            <div class="login-box">
+                <div class="login-title">🌐 6G 语义切片管控平台</div>
+                <el-form size="large">
+                    <el-form-item>
+                        <el-input v-model="loginForm.username" placeholder="账号 (admin 或 user)"></el-input>
+                    </el-form-item>
+                    <el-form-item>
+                        <el-input v-model="loginForm.password" type="password" placeholder="密码 (123456)" @keyup.enter="handleLogin"></el-input>
+                    </el-form-item>
+                    <el-button type="primary" style="width: 100%; margin-top: 10px;" @click="handleLogin" :loading="isLoggingIn">登 录 系 统</el-button>
+                </el-form>
+                <div style="margin-top: 20px; font-size: 12px; color: #999;">
+                    管理员: admin/123456 | 行业租户: user/123456
+                </div>
+            </div>
+        </div>
+
+        <div v-else class="main-layout">
+            <div class="header-bar">
+                <h3 style="margin:0; color: #409EFF;">🌐 6G 意图驱动语义切片数字孪生系统</h3>
+                <div class="user-profile">
+                    <span style="font-size: 20px;">{{ currentUser.avatar }}</span>
+                    <b>{{ currentUser.username }}</b>
+                    <el-tag :type="currentUser.role === 'admin' ? 'danger' : 'success'" size="small">
+                        {{ currentUser.role === 'admin' ? '网络运营商' : '切片租户' }}
+                    </el-tag>
+                    <el-button type="text" @click="handleLogout" style="margin-left: 10px; color: #F56C6C;">退出登录</el-button>
+                </div>
+            </div>
+
+            <el-row :gutter="20">
+                <el-col :span="8">
+                    <el-card v-if="currentUser.role === 'admin'" header="📡 1. 网络物理环境配置 (仅运营商可用)">
+                        <el-form label-width="110px" size="small">
+                            <el-form-item label="总功率 (W)"><el-input-number v-model="networkConfig.total_power" :min="1"></el-input-number></el-form-item>
+                            <el-form-item label="总带宽 (MHz)"><el-input-number v-model="networkConfig.total_bandwidth" :min="1"></el-input-number></el-form-item>
+                            <el-form-item label="环境SNR (dB)"><el-input-number v-model="networkConfig.snr_db"></el-input-number></el-form-item>
+                            <el-form-item label="CPU能力(GHz)"><el-input-number v-model="networkConfig.cpu_capacity" :precision="1"></el-input-number></el-form-item>
+                            <el-form-item label="能效阈值(J)"><el-input-number v-model="networkConfig.energy_threshold" :precision="1"></el-input-number></el-form-item>
+                            <el-button type="primary" style="width:100%" @click="initNetwork">下发基站物理参数</el-button>
+                        </el-form>
+                    </el-card>
+
+                    <el-card v-if="currentUser.role === 'admin'" header="🧩 2. 语义知识库切片部署">
+                        <el-button type="success" style="width:100%" @click="deploySlices">一键激活全量行业切片底座</el-button>
+                    </el-card>
+
+                    <el-card header="🤖 3. AI 意图识别业务接入 (租户控制台)">
+                        <el-input type="textarea" :rows="3" v-model="smartText" placeholder="请输入您的业务意图（如：医疗高清影像传输、紧急工业控制...）"></el-input>
+                        <div v-if="aiParsedResult" class="intent-box">
+                            <b style="color:#e6a23c; font-size:12px">AI 意图解析成功：</b><br/>
+                            <el-tag type="success" style="margin-top:5px">{{ aiParsedResult.domain_zh }}</el-tag>
+                            <el-tag type="warning" style="margin-top:5px; margin-left:10px">{{ aiParsedResult.req_zh }}</el-tag>
+                        </div>
+                        <el-button type="warning" style="width:100%; margin-top:15px" @click="analyzeAndAddTask" :loading="isAnalyzing">智能解析并申请网络切片资源</el-button>
+                        <el-button type="info" style="width:100%; margin-top:10px" @click="clearTasks" plain>清空我的任务队列</el-button>
+                    </el-card>
+                </el-col>
+
+                <el-col :span="16">
+                    <el-card v-loading="isAllocating" element-loading-text="🌐 粒子群算法(PSO)正在进行毫秒级切片资源重构...">
+                        <template #header>
+                            <div style="display:flex; justify-content: space-between; align-items: center">
+                                <b>📊 全局资源调度监控大屏</b>
+                                <el-radio-group v-model="currentStrategy" @change="runAllocation" size="small">
+                                    <el-radio-button label="semantic">语义策略</el-radio-button>
+                                    <el-radio-button label="network">传统策略</el-radio-button>
+                                    <el-radio-button label="none">无切片(大锅饭)</el-radio-button>
+                                </el-radio-group>
+                            </div>
+                        </template>
+
+                        <el-table :data="allocationResults" border height="220" size="small">
+                            <el-table-column prop="service_id" label="任务ID" width="80"></el-table-column>
+                            <el-table-column prop="slice_id" label="分配切片" width="120"></el-table-column>
+                            <el-table-column prop="assigned_bandwidth" label="带宽(MHz)"></el-table-column>
+                            <el-table-column prop="assigned_power" label="功率(W)"></el-table-column>
+                            <el-table-column prop="estimated_delay" label="时延(ms)"></el-table-column>
+                            <el-table-column label="内容相似度" width="110">
+                                <template #default="scope">
+                                    <b :style="{color: scope.row.similarity_score > 60 ? '#67C23A' : '#F56C6C'}">
+                                        {{ scope.row.similarity_score }}%
+                                    </b>
+                                </template>
+                            </el-table-column>
+                        </el-table>
+
+                        <div id="resourceChart" class="chart-box"></div>
+                        <div id="mainChart" class="chart-box"></div>
+                    </el-card>
+                </el-col>
+            </el-row>
+        </div>
+    </div>
+
+    <script src="https://cdn.staticfile.org/vue/3.2.37/vue.global.prod.js"></script>
+    <script src="https://cdn.staticfile.org/element-plus/2.2.0/index.full.min.js"></script>
+    <script src="https://cdn.staticfile.org/echarts/5.3.3/echarts.min.js"></script>
+
+    <script>
+        const { createApp, ref, onMounted, nextTick } = Vue;
+        const API_BASE = "http://127.0.0.1:8000";
+
+        const app = createApp({
+            setup() {
+                // ================== 用户系统状态 ==================
+                const isLoggedIn = ref(false);
+                const isLoggingIn = ref(false);
+                const loginForm = ref({ username: 'admin', password: '123456' });
+                const currentUser = ref(null);
+
+                // ================== 原有系统状态 ==================
+                const networkConfig = ref({ total_power: 10.0, total_bandwidth: 20.0, snr_db: 10.0, cpu_capacity: 5.0, energy_threshold: 10.0, channel_model: "AWGN" });
+                const currentStrategy = ref('semantic');
+                const smartText = ref('');
+                const isAnalyzing = ref(false);
+                const isAllocating = ref(false); // 控制右侧 Loading
+                const aiParsedResult = ref(null);
+                const allocationResults = ref([]);
+                const activeTasks = ref([]);
+
+                let myChart = null;
+                let myResourceChart = null;
+                let taskCounter = 1;
+
+                // ================== 登录与注销逻辑 ==================
+                const handleLogin = async () => {
+                    if (!loginForm.value.username || !loginForm.value.password) {
+                        ElementPlus.ElMessage.warning('请输入账号和密码');
+                        return;
+                    }
+                    isLoggingIn.value = true;
+                    try {
+                        const res = await fetch(`${API_BASE}/auth/login`, {
+                            method: 'POST', headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify(loginForm.value)
+                        });
+                        if (res.ok) {
+                            const data = await res.json();
+                            currentUser.value = data.user;
+                            isLoggedIn.value = true;
+                            ElementPlus.ElMessage.success(`欢迎回来，${data.user.username}`);
+
+                            // 登录成功后，等待 DOM 渲染完成，再初始化图表
+                            nextTick(() => { initCharts(); });
+                        } else {
+                            ElementPlus.ElMessage.error('账号或密码错误！');
+                        }
+                    } catch (e) {
+                        ElementPlus.ElMessage.error('无法连接到后端服务器，请确认 main_api.py 已启动');
+                    } finally {
+                        isLoggingIn.value = false;
+                    }
+                };
+
+                const handleLogout = () => {
+                    isLoggedIn.value = false;
+                    currentUser.value = null;
+                    clearTasks();
+                };
+
+                // ================== 原有业务逻辑 ==================
+                const initNetwork = async () => {
+                    try {
+                        const res = await fetch(`${API_BASE}/config/network`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(networkConfig.value) });
+                        if(res.ok) ElementPlus.ElMessage.success('物理环境配置成功同步');
+                    } catch (e) { ElementPlus.ElMessage.error('无法连接后端'); }
+                };
+
+                const deploySlices = async () => {
+                    const slices = [
+                        { slice_id: "slice_health", slice_name: "Smart_Healthcare", vocab_path: "./checkpoint/vocab_en.json", codecs: [{ codec_type: "deepsc_text", deployment_level: "full", kb_type: "healthcare_kb" }] },
+                        { slice_id: "slice_industry", slice_name: "Industrial_IoT", vocab_path: "./checkpoint/vocab_en90%.json", codecs: [{ codec_type: "deepsc_text", deployment_level: "lite", kb_type: "industry_kb" }] },
+                        { slice_id: "slice_city", slice_name: "Smart_City", vocab_path: "./checkpoint/vocab_en80%.json", codecs: [{ codec_type: "deepsc_text", deployment_level: "lite", kb_type: "city_kb" }] }
+                    ];
+                    const res = await fetch(`${API_BASE}/config/slices`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(slices) });
+                    if(res.ok) ElementPlus.ElMessage.success('行业切片底座部署完成');
+                };
+
+                const analyzeAndAddTask = async () => {
+                    if (!smartText.value) return;
+                    isAnalyzing.value = true;
+                    try {
+                        const res = await fetch(`${API_BASE}/services/analyze_intent`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ text: smartText.value }) });
+                        const result = await res.json();
+                        aiParsedResult.value = { domain_zh: result.parsed_domain, req_zh: result.parsed_req_type };
+
+                        const task = { service_id: `SRV_00${taskCounter++}`, domain: result.parsed_domain, requirement_type: result.parsed_req_type, priority: 1 };
+                        activeTasks.value.push(task);
+
+                        await runAllocation();
+                    } catch (e) { ElementPlus.ElMessage.error('业务接入失败'); }
+                    finally { isAnalyzing.value = false; }
+                };
+
+                const runAllocation = async () => {
+                    if (activeTasks.value.length === 0) return;
+                    isAllocating.value = true; // 🚀 触发骨架屏
+                    try {
+                        await fetch(`${API_BASE}/services/match?strategy=${currentStrategy.value}`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(activeTasks.value) });
+                        const res = await fetch(`${API_BASE}/resources/allocate`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ strategy: currentStrategy.value }) });
+                        if (res.status === 400) {
+                            ElementPlus.ElMessage.warning('请先让 Admin 管理员下发网络配置并部署切片！');
+                            return;
+                        }
+                        allocationResults.value = await res.json();
+                        updateCharts();
+                    } catch (e) { console.error(e); }
+                    finally { isAllocating.value = false; } // 🚀 关闭骨架屏
+                };
+
+                // ================== 图表逻辑 ==================
+                const initCharts = () => {
+                    myChart = echarts.init(document.getElementById('mainChart'));
+                    myResourceChart = echarts.init(document.getElementById('resourceChart'));
+                    window.addEventListener('resize', () => { myChart.resize(); myResourceChart.resize(); });
+                    updateCharts();
+                };
+
+                const updateCharts = () => {
+                    if (!myChart || !myResourceChart) return;
+
+                    myChart.setOption({
+                        xAxis: { type: 'category', data: allocationResults.value.map(d => d.service_id) },
+                        yAxis: [{ type: 'value', name: '时延(ms)' }, { type: 'value', name: '相似度(%)', max: 100 }],
+                        series: [
+                            { name: '时延', type: 'bar', data: allocationResults.value.map(d => d.estimated_delay), itemStyle: {color: '#409EFF'} },
+                            { name: '相似度', type: 'line', yAxisIndex: 1, data: allocationResults.value.map(d => d.similarity_score), itemStyle: {color: '#67C23A'} }
+                        ]
+                    });
+
+                    const usedPower = allocationResults.value.reduce((sum, item) => sum + item.assigned_power, 0);
+                    const usedBandwidth = allocationResults.value.reduce((sum, item) => sum + item.assigned_bandwidth, 0);
+                    const remainPower = Math.max(0, networkConfig.value.total_power - usedPower);
+                    const remainBandwidth = Math.max(0, networkConfig.value.total_bandwidth - usedBandwidth);
+
+                    myResourceChart.setOption({
+                        title: [
+                            { text: '⚡ 功率消耗监控', left: '25%', top: '5%', textAlign: 'center', textStyle: { fontSize: 13, color: '#606266' } },
+                            { text: '📶 频谱占用监控', left: '75%', top: '5%', textAlign: 'center', textStyle: { fontSize: 13, color: '#606266' } }
+                        ],
+                        tooltip: { trigger: 'item', formatter: '{a} <br/>{b}: {c} ({d}%)' },
+                        legend: { bottom: '0%', left: 'center', itemWidth: 10, itemHeight: 10, textStyle: { fontSize: 11 } },
+                        series: [
+                            { name: '功率分配', type: 'pie', radius: ['45%', '70%'], center: ['25%', '55%'], itemStyle: { borderRadius: 5, borderColor: '#fff', borderWidth: 2 }, label: { show: false }, data: [{ value: usedPower.toFixed(2), name: '已消耗功率', itemStyle: { color: '#F56C6C' } }, { value: remainPower.toFixed(2), name: '绿色闲置保留', itemStyle: { color: '#95d475' } }] },
+                            { name: '带宽分配', type: 'pie', radius: ['45%', '70%'], center: ['75%', '55%'], itemStyle: { borderRadius: 5, borderColor: '#fff', borderWidth: 2 }, label: { show: false }, data: [{ value: usedBandwidth.toFixed(2), name: '已占用带宽', itemStyle: { color: '#409EFF' } }, { value: remainBandwidth.toFixed(2), name: '空闲可用频谱', itemStyle: { color: '#e6a23c' } }] }
+                        ]
+                    });
+                };
+
+                const clearTasks = () => {
+                    activeTasks.value = [];
+                    allocationResults.value = [];
+                    taskCounter = 1; smartText.value = ''; aiParsedResult.value = null;
+                    if(isLoggedIn.value) updateCharts();
+                };
+
+                return {
+                    isLoggedIn, isLoggingIn, loginForm, currentUser, handleLogin, handleLogout,
+                    networkConfig, currentStrategy, smartText, isAnalyzing, isAllocating, aiParsedResult, allocationResults,
+                    initNetwork, deploySlices, analyzeAndAddTask, clearTasks, runAllocation
+                };
+            }
+        });
+        app.use(ElementPlus);
+        app.mount('#app');
+    </script>
+</body>
+</html>

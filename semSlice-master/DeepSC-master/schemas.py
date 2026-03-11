@@ -4,7 +4,7 @@ from typing import List, Optional
 from enum import Enum
 
 # =======================
-# 新增：定义策略枚举
+# 定义策略枚举
 # =======================
 class StrategyType(str, Enum):
     SEMANTIC = "semantic"   # 语义切片 (你的算法，性能最优)
@@ -15,11 +15,10 @@ class StrategyType(str, Enum):
 # 1. 业务配置 (Service Configuration)
 # =======================
 class ServiceRequest(BaseModel):
-    service_id: str = Field(..., description="业务ID，如 'service_001'")
-    user_count: int = Field(..., description="用户数")
-    modality: str = Field(..., description="业务模态", example="text") 
-    requirement_type: str = Field(..., description="需求类型", example="high_fidelity")
-    domain: str = Field(..., description="业务领域", example="sports")
+    service_id: str
+    domain: str
+    requirement_type: str  # 确保这里和前端 js 里的 key 一致
+    priority: int = 1
 
 # =======================
 # 2. 网络配置 (Network Configuration)
@@ -50,8 +49,6 @@ class SliceProfile(BaseModel):
 # =======================
 # 4. API 请求与输出模型 (Request & Output Models)
 # =======================
-
-# [新增] 资源分配请求体
 class AllocationRequest(BaseModel):
     strategy: StrategyType = Field(..., description="资源分配策略: semantic, network, none")
 
@@ -59,15 +56,16 @@ class MatchResult(BaseModel):
     service_id: str
     slice_id: str
     matched_domain: str
-    similarity_score: float  
-    status: str = "matched"  
+    similarity_score: float
+    status: str = "matched"
 
 class AllocationResult(BaseModel):
-    mode: StrategyType = Field(..., description="当前结果的策略类型") # 使用枚举类型
+    mode: StrategyType = Field(..., description="当前结果的策略类型")
     service_id: str
     slice_id: str
-    assigned_power: float     
-    assigned_bandwidth: float 
-    estimated_delay: float    
+    assigned_power: float
+    assigned_bandwidth: float
+    estimated_delay: float
+    estimated_energy: float = Field(0.0, description="预估能耗 (J) = 功率 * 时延") # 新增能耗
     estimated_s_se: float     
     similarity_score: float = Field(0.0, description="最终的内容相似度/保真度")

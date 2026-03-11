@@ -1,191 +1,196 @@
 import numpy as np
 import math
 from typing import List
-from schemas import NetworkConfig, MatchResult, AllocationResult
+from schemas import NetworkConfig, MatchResult, AllocationResult, StrategyType, ServiceRequest
 
 
 class ResourceAllocator:
     def __init__(self, network_config: NetworkConfig):
         self.net_conf = network_config
-        # 物理常数 (来自 utils.py)
         self.d = 3000
         self.n0 = 10 ** (-114.45 / 10) * 1e-3
 
-    def _calculate_snr(self, p_watt, b_mhz):
-        # ... (保持不变) ...
-        if b_mhz <= 0: return -100
-        noise_power = b_mhz * 1e6 * (self.d ** 2) * self.n0
-        if noise_power == 0: return 0
-        snr_linear = p_watt / noise_power
-        return 10 * np.log10(snr_linear)
+    def _calculate_snr(self, p, b):
+        if b <= 0: return -100
+        # 融合前端环境基准底噪
+        env_penalty = 10 ** ((10.0 - self.net_conf.snr_db) / 10.0)
+        actual_n0 = self.n0 * env_penalty
+        SNR_linear = p / (b * 1e6 * (self.d ** 2) * actual_n0)
+        return 10 * np.log10(SNR_linear) if SNR_linear > 0 else -100
 
-    def _calculate_capacity(self, p_watt, b_mhz):
-        """
-        计算香农容量 (Shannon Capacity)
-        这是传统网络切片 (pso_netslice...) 优化的目标
-        """
-        if b_mhz <= 0: return 0
-        snr_linear = (p_watt) / (b_mhz * 1e6 * (self.d ** 2) * self.n0)
-        # Capacity = B * log2(1 + SNR)
-        return b_mhz * 1e6 * math.log2(1 + snr_linear)
+        # 🌟 替换掉你原来的这个方法，让它支持接收 req_type 参数
+    def _calculate_delay(self, b, snr_db, strategy="semantic", req_type="high_fidelity"):
+        if b <= 0: return 9999
+        C = b * 1e6 * math.log2(1 + 10 ** (snr_db / 10))
+        if C == 0: return 9999
 
+        if strategy == "semantic":
+            # 🎯 意图驱动下的动态负载
+            if req_type == "high_fidelity":
+                L_eff = 5000  # 数据量极大 (高清影像)，吃带宽
+                processing_delay = 0.005  # 深度大模型，处理耗时 5ms
+            elif req_type == "low_latency":
+                L_eff = 100  # 极简控制指令，符号极少
+                processing_delay = 0.001  # 轻量级小模型，处理耗时 1ms
+            else:
+                L_eff = 1000
+                processing_delay = 0.002
+        elif strategy == "network":
+            # 传统网络没有语义压缩，比特流原样传输
+            if req_type == "high_fidelity":
+                L_eff = 50000
+            else:
+                L_eff = 5000
+            processing_delay = 0.0001  # 没有深度学习，传统解码几乎无处理时延
+        else:
+            L_eff = 10000
+            processing_delay = 0.0002
+
+        k_symbol = 10
+        # 总时延 = 物理传输时延 + 模型推理时延
+        transmit_delay = (k_symbol * L_eff) / C
+        return transmit_delay + processing_delay
     def _estimate_similarity_proxy(self, snr_db):
-        # ... (保持不变，DeepSC 代理模型) ...
-        center = 2.0;
-        scale = 0.5
+        center, scale = 2.0, 0.5
         similarity = 1 / (1 + np.exp(-scale * (snr_db - center)))
         return max(0.0, min(1.0, similarity))
 
-    def _calculate_delay(self, b_mhz, snr_db, data_size_symbols=30000):
-        # ... (保持不变) ...
-        if b_mhz <= 0: return 9999
-        snr_linear = 10 ** (snr_db / 10)
-        capacity = b_mhz * 1e6 * math.log2(1 + snr_linear)
-        if capacity == 0: return 9999
-        return data_size_symbols / capacity
-
-    def execute_allocation(self, matched_tasks: List[MatchResult], strategy: str = "semantic") -> List[
-        AllocationResult]:
+    def execute_allocation(self, matched_tasks, strategy, services):
         if not matched_tasks: return []
-
-        # === 策略 3: 无切片 ===
-        # 对应: no_slice_random_KPI_fit5TASK.py
-        # 逻辑: 平均分配 (Equal Allocation)
         if strategy == "none":
             return self._allocation_equal(matched_tasks)
+        target = "semantic" if strategy == "semantic" else "rate"
+        return self._run_pso(matched_tasks, services, target)
 
-        # === 策略 2: 传统网络切片 ===
-        # 对应: pso_netslice_random_SS_fit5TASK.py
-        # 逻辑: PSO 优化 Sum Rate (吞吐量)
-        elif strategy == "network":
-            return self._run_pso(matched_tasks, optimization_target="rate")
-
-        # === 策略 1: 语义切片 ===
-        # 对应: pso_semanslice_SS_fit5TASK.py
-        # 逻辑: PSO 优化 Semantic Similarity
-        else:
-            return self._run_pso(matched_tasks, optimization_target="semantic")
-
-    def _allocation_equal(self, matched_tasks):
-        """平均分配资源"""
+    def _run_pso(self, matched_tasks, services, target):
         num_tasks = len(matched_tasks)
-        p_per = self.net_conf.total_power / num_tasks
-        b_per = self.net_conf.total_bandwidth / num_tasks
+        dim = 2 * num_tasks
+        pop_size = 30
+        iterations = 50
 
-        results = []
-        for task in matched_tasks:
-            snr = self._calculate_snr(p_per, b_per)
-            # 即使是无切片，我们也算一下 S-SE 用于对比
-            # 因为无切片没有匹配，相当于匹配度极低，给个 0.5 的惩罚系数
-            s_se = (self._estimate_similarity_proxy(snr) / 10) * 0.5
-            delay = self._calculate_delay(b_per, snr)
-
-            results.append(AllocationResult(
-                service_id=task.service_id,
-                slice_id="Default",
-                assigned_power=round(p_per, 4),
-                assigned_bandwidth=round(b_per, 4),
-                estimated_delay=round(delay * 1000, 2),
-                estimated_s_se=round(s_se, 4)
-            ))
-        return results
-
-    def _run_pso(self, matched_tasks, optimization_target="semantic"):
-        """通用 PSO 框架"""
-        # 只给匹配到的切片分资源 (Unmatched 不分)
-        slice_ids = list(set([t.slice_id for t in matched_tasks if t.slice_id != "Unmatched"]))
-        num_slices = len(slice_ids)
-        if num_slices == 0: return []
-
-        # PSO 参数
-        dimension = 2 * num_slices
-        pop_size = 20
-        iterations = 30
-        x_min = np.array([0.01] * num_slices + [0.1] * num_slices)
-        x_max = np.array([self.net_conf.total_power] * num_slices + [self.net_conf.total_bandwidth] * num_slices)
-
-        X = np.random.uniform(x_min, x_max, (pop_size, dimension))
-        V = np.zeros((pop_size, dimension))
-        P_best = X.copy();
-        P_best_fit = np.zeros(pop_size)
-        G_best = np.zeros(dimension);
-        G_best_fit = -1.0
+        # 初始随机分布稍微给小一点，鼓励系统从“省吃俭用”开始探索
+        X = np.random.uniform(0.2, 3.0, (pop_size, dim))
+        V = np.zeros((pop_size, dim))
+        P_best, G_best = X.copy(), np.zeros(dim)
+        P_fit, G_fit = np.full(pop_size, -1e15), -1e15
 
         for gen in range(iterations):
-            # 你的代码中的动态参数
-            progress = gen / iterations
-            c1 = 1.5 + np.sin(math.pi / 2 * (1 - (2 * progress)))
-            c2 = 1.5 + np.sin(math.pi / 2 * ((2 * progress) - 1))
-            w = 1.6 - 1.2 * progress
+            prog = gen / iterations
+            c1 = 1.5 + np.sin(math.pi / 2 * (1 - 2 * prog))
+            c2 = 1.5 + np.sin(math.pi / 2 * (2 * prog - 1))
+            w = 1.6 - 1.2 * prog
 
             for i in range(pop_size):
-                # 约束处理
-                powers = X[i, :num_slices]
-                bandwidths = X[i, num_slices:]
-                sum_p = np.sum(powers);
-                sum_b = np.sum(bandwidths)
-                if sum_p > self.net_conf.total_power: X[i, :num_slices] *= (self.net_conf.total_power / sum_p)
-                if sum_b > self.net_conf.total_bandwidth: X[i, num_slices:] *= (self.net_conf.total_bandwidth / sum_b)
-                X[i] = np.maximum(X[i], x_min)
+                # ==========================================
+                # 🌟 核心修改 1：边界控制与“按需限制”
+                # ==========================================
+                # 保证最低生存底线
+                X[i, :num_tasks] = np.clip(X[i, :num_tasks], 0.2, self.net_conf.total_power)
+                X[i, num_tasks:] = np.clip(X[i, num_tasks:], 0.5, self.net_conf.total_bandwidth)
 
-                # === Fitness 计算核心差异 ===
-                fitness = 0
-                current_p = X[i, :num_slices]
-                current_b = X[i, num_slices:]
+                # 只有当总和超出基站物理上限时，才进行强制按比例缩减；
+                # 如果没超出（有剩余），就保留原样，允许有资源闲置！
+                if np.sum(X[i, :num_tasks]) > self.net_conf.total_power:
+                    X[i, :num_tasks] = (X[i, :num_tasks] / np.sum(X[i, :num_tasks])) * self.net_conf.total_power
+                if np.sum(X[i, num_tasks:]) > self.net_conf.total_bandwidth:
+                    X[i, num_tasks:] = (X[i, num_tasks:] / np.sum(X[i, num_tasks:])) * self.net_conf.total_bandwidth
 
-                for idx in range(num_slices):
-                    p = current_p[idx];
-                    b = current_b[idx]
+                fit = 0
+                min_sim = 1.0
 
-                    if optimization_target == "semantic":
-                        # 语义目标：最大化相似度
-                        snr = self._calculate_snr(p, b)
-                        fitness += self._estimate_similarity_proxy(snr)
-                    elif optimization_target == "rate":
-                        # 传统目标：最大化吞吐量
-                        fitness += self._calculate_capacity(p, b)
+                for idx in range(num_tasks):
+                    p = X[i, idx]
+                    b = X[i, idx + num_tasks]
+                    snr = self._calculate_snr(p, b)
 
-                if fitness > P_best_fit[i]: P_best_fit[i] = fitness; P_best[i] = X[i].copy()
-                if fitness > G_best_fit: G_best_fit = fitness; G_best = X[i].copy()
+                    task = matched_tasks[idx]
+                    svc = next((s for s in services if s.service_id == task.service_id), None)
+                    req_type = svc.requirement_type if svc else "high_fidelity"
 
-            # 更新粒子
-            r1 = np.random.rand(pop_size, dimension);
-            r2 = np.random.rand(pop_size, dimension)
-            V = w * V + c1 * r1 * (P_best - X) + c2 * r2 * (G_best - X)
-            V = np.clip(V, -0.1, 0.1)
+                    if target == "semantic":
+                        sim = self._estimate_similarity_proxy(snr)
+                        delay = self._calculate_delay(b, snr, "semantic", req_type)
+
+                        if sim < min_sim: min_sim = sim
+
+                        # ==========================================
+                        # 🌟 核心修改 2：引入“绿色节能惩罚”
+                        # ==========================================
+                        if req_type == "low_latency":
+                            # 只要时延极低，轻微惩罚功率浪费 (- p * 1.5)
+                            fit += (sim * 20.0) - (delay * 80.0) - (p * 1.5) - (b * 0.5)
+                        elif req_type == "high_fidelity":
+                            # 相似度高是首要的，但在相似度满足的情况下，功率用得越多扣分越多！
+                            fit += (sim * 50.0) - (delay * 5.0) - (p * 2.0) - (b * 0.5)
+                        else:
+                            fit += (sim * 20.0) - (delay * 5.0) - (p * 1.0)
+                    else:
+                        fit += b * 1e6 * math.log2(1 + 10 ** (snr / 10))
+
+                if target == "semantic" and min_sim < 0.5:
+                    fit -= 5000.0 * (0.5 - min_sim)
+
+                if fit > P_fit[i]:
+                    P_fit[i] = fit
+                    P_best[i] = X[i].copy()
+                if fit > G_fit:
+                    G_fit = fit
+                    G_best = X[i].copy()
+
+            V = w * V + c1 * np.random.rand() * (P_best - X) + c2 * np.random.rand() * (G_best - X)
             X = X + V
 
-        # 解析结果
-        final_p = G_best[:num_slices]
-        final_b = G_best[num_slices:]
-        results = []
+            # 输出层：彻底去掉强制 100% 缩减！
+        final_p = G_best[:num_tasks]
+        final_b = G_best[num_tasks:]
 
-        for task in matched_tasks:
-            if task.slice_id not in slice_ids: continue
-            idx = slice_ids.index(task.slice_id)
-            p = float(final_p[idx]);
+        final_p = np.maximum(final_p, 0.2)
+        final_b = np.maximum(final_b, 0.5)
+
+        # 2. 物理天花板绝对锁死：如果发完保底发现把基站掏空了（超标），必须强行按比例压缩，打破保底！
+        if np.sum(final_p) > self.net_conf.total_power:
+            final_p = (final_p / np.sum(final_p)) * self.net_conf.total_power
+        if np.sum(final_b) > self.net_conf.total_bandwidth:
+            final_b = (final_b / np.sum(final_b)) * self.net_conf.total_bandwidth
+
+
+        results = []
+        for idx, t in enumerate(matched_tasks):
+            p = float(final_p[idx])
             b = float(final_b[idx])
             snr = self._calculate_snr(p, b)
 
-            # === 关键指标计算 ===
-            # S-SE (语义频谱效率) = Similarity / K
-            # 如果是传统切片 (Network Strategy)，因为是随机匹配，task.similarity_score 可能很低
-            # 所以这里的 S-SE 会自动变得很低，体现出语义切片的优势
+            svc = next((s for s in services if s.service_id == t.service_id), None)
+            req_type = svc.requirement_type if svc else "high_fidelity"
 
-            # 基础 S-SE (基于 SNR)
-            base_s_se = self._estimate_similarity_proxy(snr) / 10
-
-            # 乘以匹配度系数 (如果匹配得好是 1.0，匹配不好可能是 0.3)
-            match_factor = task.similarity_score / 100.0 if task.similarity_score > 0 else 0.1
-            final_s_se = base_s_se * match_factor
+            delay = self._calculate_delay(b, snr, target, req_type)
+            sim_base = self._estimate_similarity_proxy(snr)
+            final_sim = sim_base * (t.similarity_score / 100.0)
 
             results.append(AllocationResult(
-                service_id=task.service_id,
-                slice_id=task.slice_id,
-                assigned_power=round(p, 4),
-                assigned_bandwidth=round(b, 4),
-                estimated_delay=round(self._calculate_delay(b, snr) * 1000, 2),
-                estimated_s_se=round(final_s_se, 4)
+                mode=StrategyType.SEMANTIC if target == "semantic" else StrategyType.NETWORK,
+                service_id=t.service_id, slice_id=t.slice_id,
+                assigned_power=round(p, 4), assigned_bandwidth=round(b, 4),
+                estimated_delay=round(delay * 1000, 2),
+                estimated_energy=round(p * delay, 4),
+                estimated_s_se=round(final_sim / 10, 4),
+                similarity_score=round(final_sim * 100, 2)
             ))
-
         return results
+
+    def _allocation_equal(self, tasks):
+        n = len(tasks)
+        p_avg = self.net_conf.total_power / n
+        b_avg = self.net_conf.total_bandwidth / n
+        res = []
+        for t in tasks:
+            snr = self._calculate_snr(p_avg, b_avg)
+            delay = self._calculate_delay(b_avg, snr, "none")
+            sim = 1 / (1 + np.exp(-0.5 * (snr - 8.0)))
+            res.append(AllocationResult(
+                mode=StrategyType.NONE, service_id=t.service_id, slice_id="Pool",
+                assigned_power=p_avg, assigned_bandwidth=b_avg,
+                estimated_delay=round(delay * 1000, 2), estimated_energy=round(p_avg * delay, 4),
+                estimated_s_se=round(sim / 10, 4), similarity_score=round(sim * 15, 2)
+            ))
+        return res

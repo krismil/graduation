@@ -86,3 +86,37 @@ This project builds on the foundational work presented in the paper:
 - H. Xie, Z. Qin, G. Y. Li and B. -H. Juang, "Deep Learning Enabled Semantic Communication Systems," in *IEEE Transactions on Signal Processing*, vol. 69, pp. 2663-2675, 2021, doi: [10.1109/TSP.2021.3071210](https://doi.org/10.1109/TSP.2021.3071210).  
 
 The link of this work：[https://github.com/13274086/DeepSC](https://github.com/13274086/DeepSC)
+---
+
+## New Front-Back Separated System (Added)
+
+A new split architecture is added in:
+
+- `backend/` (FastAPI)
+- `frontend/` (static web UI)
+
+### Four Core Modules
+
+1. Semantic Communication Processing
+2. Slice Construction and Distribution
+3. Resource Management and Orchestration
+4. Performance Evaluation and Visualization
+
+### Quick Start
+
+Backend:
+
+```bash
+cd backend
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+```
+
+Frontend:
+
+```bash
+cd frontend
+python -m http.server 5173
+```
+
+Open `http://127.0.0.1:5173`.

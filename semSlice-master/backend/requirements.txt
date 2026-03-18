@@ -1,0 +1,13 @@
+﻿# API server
+fastapi
+uvicorn
+pydantic
+numpy
+
+# Legacy DeepSC compare dependencies (needed for /analysis/legacy/strategy-compare)
+torch
+tensorflow
+scikit-learn
+tqdm
+w3lib
+bert4keras

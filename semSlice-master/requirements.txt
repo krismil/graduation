@@ -1,7 +1,8 @@
+﻿# Core
+numpy
 tqdm
-numpy 
 torch
-pickle
-sklearn
 tensorflow
-
+scikit-learn
+w3lib
+bert4keras

@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SemSlice 控制中心</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="system-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">S</div>
+        <div>
+          <h1>SemSlice OS</h1>
+          <p>语义切片编排平台</p>
+        </div>
+      </div>
+
+      <nav class="nav-menu">
+        <button class="nav-btn active" data-target="panel-auth">登录会话</button>
+        <button class="nav-btn" data-target="panel-business">业务配置</button>
+        <button class="nav-btn" data-target="panel-network">网络配置</button>
+        <button class="nav-btn" data-target="panel-slice">切片配置</button>
+        <button class="nav-btn" data-target="panel-adapt">业务适配</button>
+        <button class="nav-btn" data-target="panel-resource">资源分配</button>
+        <button class="nav-btn" data-target="panel-performance">性能评估</button>
+        <button class="nav-btn" data-target="panel-compare">策略对比</button>
+        <button class="nav-btn" data-target="panel-output">系统输出</button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div id="sidebarRole" class="role-pill">访客模式</div>
+        <div id="sidebarUser" class="sidebar-user">未登录</div>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div>
+          <h2>语义通信切片控制中心</h2>
+          <p>管理员/租户双系统 | 切片适配 | 资源编排 | 可视化展示</p>
+        </div>
+        <div class="topbar-actions">
+          <button id="quickRunBtn" class="ghost-btn">一键运行</button>
+          <span id="globalStatus" class="global-status" data-tone="idle">系统待配置</span>
+        </div>
+      </header>
+
+      <main class="panel-stack">
+        <section id="panel-auth" class="panel" data-panel>
+          <h3>6) 登录系统</h3>
+          <div class="grid2">
+            <div class="form-row"><label>后端地址</label><input id="apiBase" value="http://127.0.0.1:8000/api/v1" /></div>
+            <div class="form-row"><label>系统类型</label><select id="systemType"><option value="tenant">租户系统</option><option value="admin">管理员系统</option></select></div>
+            <div class="form-row"><label>用户名</label><input id="username" value="tenant1" /></div>
+            <div class="form-row"><label>密码</label><input id="password" type="password" value="tenant123" /></div>
+          </div>
+          <div class="actions">
+            <button id="loginBtn">登录</button>
+            <button id="logoutBtn" class="secondary-btn">退出登录</button>
+            <button id="loadExampleBtn" class="secondary-btn">加载示例配置</button>
+          </div>
+          <div id="loginStatus" class="status">未登录</div>
+        </section>
+
+        <section id="panel-business" class="panel panel-hidden" data-panel>
+          <h3>1) 业务配置（文本）</h3>
+          <div class="grid2">
+            <div class="form-row"><label>用户数</label><input id="userCount" type="number" min="1" value="6" /></div>
+            <div class="form-row"><label>租户ID</label><input id="tenantId" value="tenant-1" /></div>
+            <div class="form-row"><label>业务模态</label><select id="modality"><option value="text">text（当前仅文本）</option></select></div>
+            <div class="form-row"><label>业务需求类型</label><select id="defaultRequirement"><option value="high_fidelity">高保真</option><option value="low_latency">低时延</option></select></div>
+            <div class="form-row"><label>业务领域类型</label><select id="defaultDomain"><option value="animal">动物</option><option value="music">音乐</option><option value="sports">体育</option></select></div>
+          </div>
+          <div class="form-row wide"><label>用户列表JSON（可选）</label><textarea id="usersJson" rows="8" placeholder="可留空自动生成"></textarea></div>
+          <div class="actions"><button id="buildBusinessBtn">生成业务配置</button></div>
+          <div id="businessSummary" class="status"></div>
+        </section>
+
+        <section id="panel-network" class="panel panel-hidden admin-only" data-panel>
+          <h3>2) 网络配置（管理员）</h3>
+          <div class="grid2">
+            <div class="form-row"><label>CPU处理能力</label><input id="cpuCapacity" type="number" step="0.1" value="120" /></div>
+            <div class="form-row"><label>计算能耗阈值</label><input id="energyThreshold" type="number" step="0.1" value="650" /></div>
+            <div class="form-row"><label>总带宽</label><input id="totalBandwidth" type="number" step="0.01" value="2.4" /></div>
+            <div class="form-row"><label>总功率</label><input id="totalPower" type="number" step="0.01" value="1.2" /></div>
+            <div class="form-row"><label>信道场景</label><select id="channelScenario"><option value="factory_indoor">工厂室内</option><option value="satellite_link">卫星链路</option><option value="urban_macro">城市宏站</option></select></div>
+          </div>
+          <div class="actions"><button id="buildNetworkBtn">保存网络配置</button></div>
+          <div id="networkSummary" class="status"></div>
+        </section>
+
+        <section id="panel-slice" class="panel panel-hidden admin-only" data-panel>
+          <h3>3) 切片配置（管理员）</h3>
+          <div class="grid2">
+            <div class="form-row"><label>切片数</label><input id="sliceCount" type="number" min="1" value="3" /></div>
+            <div class="form-row"><label>切片命名</label><input id="sliceNames" value="animal-slice,music-slice,sports-slice" /></div>
+            <div class="form-row"><label>语义编解码器数</label><input id="codecCount" type="number" min="1" value="3" /></div>
+            <div class="form-row"><label>编解码器类型</label><select id="codecModality"><option value="text">text</option></select></div>
+          </div>
+          <div class="form-row wide"><label>知识库配置JSON</label><textarea id="kbJson" rows="8">[
+  {"kb_id":"kb-animal","kb_type":"animal","knowledge_level":0.92},
+  {"kb_id":"kb-music","kb_type":"music","knowledge_level":0.88},
+  {"kb_id":"kb-sports","kb_type":"sports","knowledge_level":0.86}
+]</textarea></div>
+          <div class="actions"><button id="buildSliceBtn">生成切片配置</button></div>
+          <div id="sliceSummary" class="status"></div>
+        </section>
+
+        <section id="panel-adapt" class="panel panel-hidden" data-panel>
+          <h3>4) 切片与业务适配选择</h3>
+          <div class="form-row"><label>匹配方法</label><select id="adaptMethod"><option value="similarity">知识库相似度</option><option value="domain">业务领域匹配</option></select></div>
+          <div class="actions"><button id="runAdaptBtn">执行适配</button></div>
+          <div id="adaptTable"></div>
+        </section>
+
+        <section id="panel-resource" class="panel panel-hidden" data-panel>
+          <h3>5) 资源分配</h3>
+          <div class="form-row"><label>分配后端</label><select id="allocationBackend"><option value="online_pso">在线编排后端（默认）</option><option value="legacy_experiment">严格复现实验后端（legacy）</option></select></div>
+          <div class="form-row"><label>分配算法</label><select id="allocAlgorithm"><option value="pso">PSO（在线）</option><option value="weighted">加权分配</option><option value="equal">平均分配</option><option value="latency_first">低时延优先</option></select></div>
+          <div class="grid2">
+            <div class="form-row"><label>Legacy策略</label><select id="legacyStrategy"><option value="semslice">semslice</option><option value="netslice">netslice</option></select></div>
+            <div class="form-row"><label>Legacy场景</label><select id="legacyScenario"><option value="fitSNR">fitSNR</option><option value="fit5TASK">fit5TASK</option><option value="fit15TASK">fit15TASK</option></select></div>
+            <div class="form-row"><label>Legacy迭代数</label><input id="legacyIterations" type="number" min="1" value="2" /></div>
+            <div class="form-row"><label>Legacy粒子数</label><input id="legacyParticles" type="number" min="2" value="2" /></div>
+          </div>
+          <div class="actions">
+            <button id="runAllocateBtn">执行资源分配</button>
+            <button id="runPerformanceBtn" class="secondary-btn">性能评估</button>
+            <button id="runSystemBtn" class="secondary-btn">一键运行当前系统</button>
+          </div>
+          <div id="resourceSummary" class="status"></div>
+          <div id="resourceBreakdown"></div>
+          <div id="allocationTable"></div>
+          <h4>当前剩余资源</h4>
+          <div class="pie-panel">
+            <div id="remainingPieChart" class="remaining-pie"></div>
+            <div id="remainingPieLegend" class="remaining-legend"></div>
+          </div>
+        </section>
+
+        <section id="panel-performance" class="panel panel-hidden metrics" data-panel>
+          <h3>性能指标</h3>
+          <div class="cards" id="metricCards"></div>
+          <h4>语义保真度</h4>
+          <div id="fidelityChart" class="chart"></div>
+          <h4>端到端时延</h4>
+          <div id="delayChart" class="chart"></div>
+        </section>
+
+        <section id="panel-compare" class="panel panel-hidden" data-panel>
+          <h3>7) 源仓库三策略对比（SemSlice / NetSlice / Random）</h3>
+          <div class="grid2">
+            <div class="form-row"><label>对比场景</label><select id="compareScenario"><option value="fitSNR">fitSNR</option><option value="fit5TASK">fit5TASK</option><option value="fit15TASK">fit15TASK</option></select></div>
+            <div class="form-row"><label>资源向量(6维)</label><input id="compareVector" value="0.2,0.3,0.5,0.6,0.8,0.6" /></div>
+          </div>
+          <div class="actions"><button id="runLegacyCompareBtn">运行三策略对比</button></div>
+          <div id="legacyCompareStatus" class="status"></div>
+          <div id="legacyCompareSummary"></div>
+          <h4>平均时延对比（ms）</h4>
+          <div id="legacyDelayChart" class="chart"></div>
+          <h4>平均SS对比</h4>
+          <div id="legacySSChart" class="chart"></div>
+          <h4>平均S-SE对比</h4>
+          <div id="legacySSEChart" class="chart"></div>
+          <h4>任务级时延对比（ms）</h4>
+          <div id="legacyDelayTaskTable"></div>
+        </section>
+
+        <section id="panel-output" class="panel panel-hidden" data-panel>
+          <h3>系统输出</h3>
+          <pre id="outputBox"></pre>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

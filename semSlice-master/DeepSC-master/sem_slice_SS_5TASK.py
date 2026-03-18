@@ -1,4 +1,6 @@
 import os
+os.environ['TF_KERAS'] = '1'
+import os
 import random
 import json
 import torch
@@ -14,7 +16,7 @@ from sklearn.preprocessing import normalize
 from tensorflow import keras
 from bert4keras.backend import keras
 from bert4keras.bert import build_bert_model 
-from bert4keras.tokenizer import Tokenizer 
+from bert4keras.tokenizers import Tokenizer 
 from w3lib.html import remove_tags
 
 from utils import *

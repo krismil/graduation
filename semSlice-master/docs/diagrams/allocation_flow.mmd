@@ -1,0 +1,16 @@
+flowchart TD
+    A[前端调用接口<br/>POST /module/resources/allocate] --> B[读取输入参数<br/>users + relations + network]
+    B --> C{分配后端选择}
+
+    C -->|legacy_experiment| D[运行 legacy 6维PSO<br/>适应度调用 evaluate_legacy_vector]
+    D --> E[按切片映射结果<br/>下发到用户]
+
+    C -->|online_pso + pso| F[运行在线PSO _PSOAllocator<br/>粒子维度=3N(带宽/功率/计算)]
+    F --> G[目标函数评估<br/>效用最大化 + 公平增强 - 约束惩罚]
+    G --> E
+
+    C -->|online_pso + weighted/equal/latency_first| H[执行规则分配策略]
+    H --> E
+
+    E --> I[计算资源统计与时间线<br/>used_resources / remaining_resources / timeline]
+    I --> J[返回分配结果给前端展示]

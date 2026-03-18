@@ -1,0 +1,47 @@
+@startuml
+left to right direction
+skinparam packageStyle rectangle
+
+actor 管理员 as Admin
+actor 租户 as Tenant
+
+rectangle "语义通信切片系统" {
+  usecase "登录/登出" as UC_Login
+  usecase "业务配置" as UC_Business
+  usecase "网络配置(管理员)" as UC_Network
+  usecase "切片配置(管理员)" as UC_Slice
+  usecase "业务-切片适配" as UC_Adapt
+  usecase "资源分配" as UC_Alloc
+  usecase "性能评估" as UC_Eval
+  usecase "一键运行全流程" as UC_Run
+  usecase "三策略性能对比" as UC_Compare
+  usecase "调用legacy实验后端" as UC_Legacy
+}
+
+Admin --> UC_Login
+Tenant --> UC_Login
+
+Admin --> UC_Business
+Tenant --> UC_Business
+
+Admin --> UC_Network
+Admin --> UC_Slice
+
+Admin --> UC_Adapt
+Tenant --> UC_Adapt
+
+Admin --> UC_Alloc
+Tenant --> UC_Alloc
+
+Admin --> UC_Eval
+Tenant --> UC_Eval
+
+Admin --> UC_Run
+Tenant --> UC_Run
+
+Admin --> UC_Compare
+Tenant --> UC_Compare
+
+UC_Alloc .> UC_Legacy : <<extend>>
+UC_Compare .> UC_Legacy : <<include>>
+@enduml

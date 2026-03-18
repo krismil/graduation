@@ -1,0 +1,28 @@
+@startuml
+start
+
+:输入 ResourceAllocationRequestV2;
+:读取 users / relations / network;
+
+if (allocation_backend == legacy_experiment?) then (是)
+  :运行 6维PSO(3功率+3带宽);
+  :fitness = evaluate_legacy_vector + 语义指标奖励 - 约束惩罚;
+  :按切片映射下发到用户;
+else (否)
+  if (algorithm == pso?) then (是)
+    :运行在线PSO(_PSOAllocator);
+    :目标=效用最大化+公平性增强-时延/保真惩罚;
+  else (否)
+    :执行规则分配(weighted/equal/latency_first);
+  endif
+endif
+
+:计算 energy_cost = 1.8*compute + 45*power;
+if (超过能耗阈值?) then (是)
+  :按比例缩放 compute;
+endif
+
+:输出 allocations;
+:输出 used_resources / remaining_resources / timeline;
+stop
+@enduml

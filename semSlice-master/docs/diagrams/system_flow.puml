@@ -1,0 +1,30 @@
+@startuml
+start
+:用户登录(管理员/租户);
+if (鉴权成功?) then (是)
+  :获取角色上下文;
+else (否)
+  :返回401/403;
+  stop
+endif
+
+:配置业务参数;
+if (角色=管理员?) then (是)
+  :配置网络参数;
+  :配置切片参数;
+else (否)
+  :复用管理员全局网络/切片配置;
+endif
+
+:执行业务-切片适配;
+:执行资源分配(online_pso / legacy_experiment);
+:执行性能评估;
+:前端展示表格与图表;
+
+if (需要策略对比?) then (是)
+  :调用 /analysis/legacy/strategy-compare;
+  :渲染时延/SS/S-SE 对比;
+endif
+
+stop
+@enduml

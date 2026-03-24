@@ -1,4 +1,5 @@
-﻿import secrets
+﻿import re
+import secrets
 from typing import Dict, List, Optional
 
 from fastapi import Header, HTTPException
@@ -15,8 +16,23 @@ USERS = {
 SESSIONS = {}
 
 
+def _dynamic_tenant_account(username: str) -> Optional[Dict[str, Optional[str]]]:
+    match = re.fullmatch(r"tenant(\d+)", username or "")
+    if not match:
+        return None
+    idx = int(match.group(1))
+    if idx <= 0:
+        return None
+    return {"password": "tenant123", "role": "tenant", "tenant_id": f"tenant-{idx}"}
+
+
 def login(payload: LoginRequest) -> LoginResponse:
     account = USERS.get(payload.username)
+    if account is None:
+        dynamic = _dynamic_tenant_account(payload.username)
+        if dynamic is not None:
+            USERS[payload.username] = dynamic
+            account = dynamic
     if account is None or account.get("password") != payload.password:
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
@@ -71,3 +87,15 @@ def ensure_role(user: Dict[str, Optional[str]], allowed_roles: List[str]) -> Non
 def extract_token_from_header(authorization: Optional[str]) -> str:
     return _parse_token(authorization)
 
+
+def get_auth_stats() -> Dict[str, object]:
+    sessions = list(SESSIONS.values())
+    active_usernames = sorted(set(user.get("username") for user in sessions if user.get("username")))
+    active_tenant_ids = sorted(set(user.get("tenant_id") for user in sessions if user.get("tenant_id")))
+    return {
+        "active_session_count": len(SESSIONS),
+        "active_user_count": len(active_usernames),
+        "active_tenant_count": len(active_tenant_ids),
+        "active_users": active_usernames,
+        "active_tenants": active_tenant_ids,
+    }

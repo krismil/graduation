@@ -3,6 +3,7 @@ from statistics import mean
 from typing import Dict, List, Union
 
 from app.models.schemas import (
+    AdaptationRow,
     EvaluationResponse,
     NetworkConfig,
     PerformanceEvaluateRequest,
@@ -21,9 +22,11 @@ DELAY_THRESHOLD_MS = 130.0
 
 
 def _service_pass(task_type: str, fidelity: float, delay_ms: float) -> bool:
-    if task_type == "RT":
+    # 兼容两套任务类型命名：旧版 RT/HF 与新版 low_latency/high_fidelity
+    task = (task_type or "").strip().lower()
+    if task in {"rt", "low_latency"}:
         return delay_ms <= DELAY_THRESHOLD_MS
-    if task_type == "HF":
+    if task in {"hf", "high_fidelity"}:
         return fidelity >= SIM_THRESHOLD
     return fidelity >= 0.55 and delay_ms <= 180
 
@@ -109,6 +112,7 @@ def evaluate(
 
 def evaluate_performance(payload: PerformanceEvaluateRequest) -> PerformanceEvaluateResponse:
     users_map: Dict[str, UserBusinessItem] = {user.user_id: user for user in payload.users}
+    relation_map: Dict[str, AdaptationRow] = {row.user_id: row for row in payload.relations}
     scenario_profile = CHANNEL_SCENARIOS.get(payload.network.channel_scenario, CHANNEL_SCENARIOS["factory_indoor"])
     noise_dbm = float(scenario_profile["noise_dbm"])
     distance_factor = float(scenario_profile["distance_factor"])
@@ -119,7 +123,12 @@ def evaluate_performance(payload: PerformanceEvaluateRequest) -> PerformanceEval
         if user is None:
             continue
         semantic = semantic_metrics_for_user(user, allocation, noise_dbm, distance_factor)
-        passed = _service_pass(user.requirement_type, semantic["fidelity"], semantic["delay_ms"])
+        relation = relation_map.get(user.user_id)
+        similarity_score = float(relation.similarity_score) if relation is not None else 0.65
+        # 将知识匹配显式注入 SS：匹配高则保真度增强，匹配低则轻微衰减。
+        knowledge_factor = 0.90 + 0.20 * max(0.0, min(1.0, similarity_score))
+        fidelity_value = max(0.0, min(1.0, float(semantic["fidelity"]) * knowledge_factor))
+        passed = _service_pass(user.requirement_type, fidelity_value, semantic["delay_ms"])
         user_metrics.append(
             {
                 "user_id": user.user_id,
@@ -127,13 +136,15 @@ def evaluate_performance(payload: PerformanceEvaluateRequest) -> PerformanceEval
                 "slice_id": allocation.slice_id,
                 "domain_type": user.domain_type,
                 "requirement_type": user.requirement_type,
-                "fidelity": semantic["fidelity"],
+                "fidelity": fidelity_value,
                 "delay_ms": semantic["delay_ms"],
                 "snr_db": semantic["snr_db"],
                 "bandwidth": allocation.bandwidth,
                 "power": allocation.power,
                 "compute": allocation.compute,
                 "energy_cost": allocation.energy_cost,
+                "similarity_score": similarity_score,
+                "knowledge_factor": round(knowledge_factor, 4),
                 "pass": passed,
             }
         )

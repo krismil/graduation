@@ -1,0 +1,41 @@
+@startuml
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName Microsoft YaHei
+skinparam shadowing false
+skinparam ArrowColor #444444
+skinparam ArrowThickness 1
+skinparam roundcorner 6
+skinparam activity {
+  BackgroundColor #EEEEEE
+  BorderColor #4A4A4A
+  FontColor #222222
+}
+
+start
+
+:输入评估数据\nusers + relations + allocations + network;
+
+:计算语义通信指标\nsnr_db / delay_ms / fidelity;
+
+if (业务类型) then (low_latency)
+  :按时延阈值判定通过;
+else (high_fidelity/other)
+  :按保真阈值或双阈值判定;
+endif
+
+:计算能耗\nenergy_cost = 1.8 * compute + 45 * power;
+
+:生成用户级指标明细\nfidelity/delay/snr/resource/energy;
+
+:聚合系统级指标\navg_fidelity/avg_delay_ms/pass_rate/avg_energy;
+
+:生成图表数据\nfidelity_by_user\ndelay_by_user\nresource_by_user;
+
+:前端可视化展示\n指标卡 + 柱状图 + 表格 + 饼图;
+
+if (策略对比开关) then (开启)
+  :调用 legacy 对比接口\n输出 avg_delay_ms / avg_ss / avg_s_se;
+endif
+
+stop
+@enduml

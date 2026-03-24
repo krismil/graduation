@@ -1,0 +1,66 @@
+@startuml
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName Microsoft YaHei
+skinparam shadowing false
+skinparam ArrowColor #444444
+skinparam ArrowThickness 1
+skinparam activity {
+  BackgroundColor #EEEEEE
+  BorderColor #4A4A4A
+  FontColor #222222
+  DiamondBackgroundColor #F6F6F6
+  DiamondBorderColor #4A4A4A
+}
+
+start
+
+partition "1. 认证与权限管理模块" {
+  :用户登录（管理员/租户）;
+  :令牌鉴权与角色校验;
+}
+
+if (鉴权通过?) then (是)
+else (否)
+  :返回未授权;
+  stop
+endif
+
+partition "2. 业务配置模块" {
+  :配置用户数量、业务需求类型、业务领域类型、租户标识;
+  :导入用户清单或自动生成用户集合;
+}
+
+if (角色为管理员?) then (是)
+  partition "3. 网络配置模块" {
+    :配置计算能力、总带宽、总功率、能耗阈值、信道场景;
+  }
+
+  partition "4. 切片配置与知识库管理模块" {
+    :配置切片数量、切片命名、编解码器数量、知识库集合;
+    :生成切片实例并建立切片-知识库绑定;
+  }
+else (否)
+  :复用管理员全局网络与切片配置;
+endif
+
+partition "5. 语义通信处理模块" {
+  :根据业务语义需求与网络参数估计信噪比、时延、语义保真度;
+}
+
+partition "6. 切片与业务适配模块" {
+  :按相似度匹配或领域优先匹配分配切片;
+  :知识不匹配降权，必要时执行兜底策略;
+}
+
+partition "7. 资源分配与编排模块" {
+  :执行在线优化分配 / 规则分配 / 复现实验后端分配;
+  :输出用户级分配结果、已用资源、剩余资源、分配时间线;
+}
+
+partition "8. 性能评估与结果展示模块" {
+  :计算平均保真度、平均时延、通过率、平均能耗;
+  :前端展示指标卡、柱状图、明细表和剩余资源饼图;
+}
+
+stop
+@enduml

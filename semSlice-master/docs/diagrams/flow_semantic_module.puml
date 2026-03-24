@@ -1,0 +1,33 @@
+@startuml
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName Microsoft YaHei
+skinparam shadowing false
+skinparam ArrowColor #444444
+skinparam ArrowThickness 1
+skinparam activity {
+  BackgroundColor #F3F3F3
+  BorderColor #4A4A4A
+  FontColor #222222
+  DiamondBackgroundColor #FAFAFA
+  DiamondBorderColor #4A4A4A
+}
+
+title 语义通信处理模块流程图（简化）
+
+start
+
+:接收业务配置与网络配置;
+
+if (用户列表完整?) then (否)
+  :按默认规则自动补全用户画像;
+else (是)
+  :使用显式用户列表;
+endif
+
+:将抽象场景映射为可计算参数\n(噪声、距离因子等);
+:按语义优先级选择编码等级;
+:估计信噪比、传输时延、语义保真度;
+:输出结构化语义处理结果;
+
+stop
+@enduml

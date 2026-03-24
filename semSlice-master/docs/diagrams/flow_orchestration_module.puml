@@ -1,0 +1,41 @@
+@startuml
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName Microsoft YaHei
+skinparam shadowing false
+skinparam ArrowColor #444444
+skinparam ArrowThickness 1
+skinparam activity {
+  BackgroundColor #F3F3F3
+  BorderColor #4A4A4A
+  FontColor #222222
+  DiamondBackgroundColor #FAFAFA
+  DiamondBorderColor #4A4A4A
+}
+
+title 资源管理与编排模块流程图（简化）
+
+start
+
+:输入用户、适配关系与网络约束;
+
+if (分配路径?) then (legacy实验路径)
+  :执行 legacy 分配;
+else (在线/规则路径)
+  if (算法为 PSO?) then (是)
+    :执行在线 PSO 分配;
+  else (否)
+    :执行规则分配;
+  endif
+endif
+
+:统一计算能耗;\nenergy_cost = 1.8 * compute + 45 * power;
+
+if (能耗超过阈值?) then (是)
+  :按比例缩放分配结果;\n确保输出可行;
+else (否)
+endif
+
+:输出分配结果、已用资源、剩余资源、分配时间线;
+
+stop
+@enduml

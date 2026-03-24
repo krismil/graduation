@@ -16,7 +16,6 @@ from app.models.schemas import (
     UserBusinessItem,
     UserResourceAllocation,
 )
-from app.services.legacy_adapter import evaluate_legacy_vector
 from app.services.semantic_service import CHANNEL_SCENARIOS, semantic_metrics_for_user
 
 
@@ -124,12 +123,19 @@ def orchestrate_resources(
     return OrchestrationResponse(allocations=allocations, remaining=remaining)
 
 
-def _base_weight(requirement_type: str, similarity_score: float, algorithm: str) -> float:
+def _base_weight(user: UserBusinessItem, similarity_score: float, algorithm: str) -> float:
+    if algorithm == "netslice":
+        payload_factor = max(0.7, min(2.4, float(user.payload_symbols) / 8.0))
+        distance_factor = max(0.7, min(2.4, float(user.distance_m) / 2200.0))
+        req_factor = 1.10 if user.requirement_type == "low_latency" else 1.0
+        # 网络切片强调业务负载与链路条件，避免退化为近似均分。
+        return 0.45 * payload_factor + 0.45 * distance_factor + 0.10 * req_factor
+
     if algorithm == "equal":
         return 1.0
     if algorithm == "latency_first":
-        return 2.2 if requirement_type == "low_latency" else 1.0
-    return (1.2 if requirement_type == "high_fidelity" else 1.4) * (0.8 + similarity_score)
+        return 2.2 if user.requirement_type == "low_latency" else 1.0
+    return (1.2 if user.requirement_type == "high_fidelity" else 1.4) * (0.8 + similarity_score)
 
 
 def _energy_cost(compute: float, power: float) -> float:
@@ -199,7 +205,7 @@ def _allocate_user_resources_simple(payload: ResourceAllocationRequestV2) -> Res
         user = user_map.get(rel.user_id)
         if not user:
             continue
-        weight = _base_weight(user.requirement_type, rel.similarity_score, payload.algorithm)
+        weight = _base_weight(user, rel.similarity_score, payload.algorithm)
         weighted_rows.append((rel, user, weight))
 
     total_weight = sum(item[2] for item in weighted_rows) or 1.0
@@ -253,6 +259,89 @@ def _allocate_user_resources_simple(payload: ResourceAllocationRequestV2) -> Res
     return _build_response(allocations, network)
 
 
+def _allocate_user_resources_semslice(payload: ResourceAllocationRequestV2) -> ResourceAllocationResponseV2:
+    users = payload.users
+    relations = payload.relations
+    network = payload.network
+
+    if not users or not relations:
+        return _build_response([], network)
+
+    user_map: Dict[str, UserBusinessItem] = {user.user_id: user for user in users}
+    rows = []
+    for rel in relations:
+        user = user_map.get(rel.user_id)
+        if user is None:
+            continue
+        sim = max(0.0, min(1.0, float(rel.similarity_score)))
+        payload_factor = max(0.7, min(2.2, float(user.payload_symbols) / 9.0))
+        distance_factor = max(0.7, min(2.2, float(user.distance_m) / 2200.0))
+        is_rt = user.requirement_type == "low_latency"
+        is_hf = user.requirement_type == "high_fidelity"
+
+        w_bw_raw = (1.80 if is_rt else 1.15) * (0.60 + 0.40 * sim) * payload_factor * (0.80 + 0.20 * distance_factor)
+        w_bw = max(0.2, w_bw_raw ** 0.75)
+        w_power = (1.30 if is_hf else 0.95) * (0.72 + 0.28 * sim) * distance_factor
+        w_compute = (1.35 if is_hf else 0.95) * (0.78 + 0.22 * sim)
+        rows.append((rel, user, w_bw, w_power, w_compute))
+
+    if not rows:
+        return _build_response([], network)
+
+    total_bw_w = sum(r[2] for r in rows) or 1.0
+    total_power_w = sum(r[3] for r in rows) or 1.0
+    total_compute_w = sum(r[4] for r in rows) or 1.0
+
+    min_bw = network.total_bandwidth / max(len(rows) * 2.0, 1.0)
+    min_power = network.total_power / max(len(rows) * 8.0, 1.0)
+    min_compute = network.cpu_capacity / max(len(rows) * 6.0, 1.0)
+
+    allocations: List[UserResourceAllocation] = []
+    used_bw = 0.0
+    used_power = 0.0
+    used_compute = 0.0
+
+    for rel, user, w_bw, w_power, w_compute in rows:
+        alloc_bw = max(min_bw, network.total_bandwidth * (w_bw / total_bw_w))
+        alloc_power = max(min_power, network.total_power * (w_power / total_power_w))
+        alloc_compute = max(min_compute, network.cpu_capacity * (w_compute / total_compute_w))
+
+        allocations.append(
+            UserResourceAllocation(
+                user_id=user.user_id,
+                tenant_id=user.tenant_id,
+                slice_id=rel.matched_slice_id,
+                bandwidth=round(alloc_bw, 5),
+                power=round(alloc_power, 5),
+                compute=round(alloc_compute, 5),
+                energy_cost=0.0,
+            )
+        )
+        used_bw += alloc_bw
+        used_power += alloc_power
+        used_compute += alloc_compute
+
+    scale_bw = network.total_bandwidth / used_bw if used_bw else 1.0
+    scale_power = network.total_power / used_power if used_power else 1.0
+    scale_compute = network.cpu_capacity / used_compute if used_compute else 1.0
+
+    used_energy = 0.0
+    for item in allocations:
+        item.bandwidth = round(item.bandwidth * scale_bw, 5)
+        item.power = round(item.power * scale_power, 5)
+        item.compute = round(item.compute * scale_compute, 5)
+        item.energy_cost = round(_energy_cost(item.compute, item.power), 5)
+        used_energy += item.energy_cost
+
+    if used_energy > network.compute_energy_threshold and used_energy > 0:
+        factor = network.compute_energy_threshold / used_energy
+        for item in allocations:
+            item.compute = round(item.compute * factor, 5)
+            item.energy_cost = round(_energy_cost(item.compute, item.power), 5)
+
+    return _build_response(allocations, network)
+
+
 class _PSOAllocator(object):
     def __init__(self, payload: ResourceAllocationRequestV2):
         self.payload = payload
@@ -266,7 +355,7 @@ class _PSOAllocator(object):
         self.n = len(self.users)
         self.dimension = self.n * 3
         self.size = min(20, max(6, self.n * 3))
-        self.time = 18
+        self.time = 24
         self.v_low = -0.1
         self.v_high = 0.1
 
@@ -291,6 +380,7 @@ class _PSOAllocator(object):
         profile = CHANNEL_SCENARIOS.get(self.network.channel_scenario, CHANNEL_SCENARIOS["factory_indoor"])
         self.noise_dbm = float(profile["noise_dbm"])
         self.distance_factor = float(profile["distance_factor"])
+        self.delay_ref_ms = float(profile.get("delay_ref_ms", 1.0))
 
         for i in range(self.size):
             self.x[i] = np.random.uniform(self.low, self.up)
@@ -308,6 +398,10 @@ class _PSOAllocator(object):
         bw = np.clip(np.array(x[:n], dtype=float), 1e-4, None)
         power = np.clip(np.array(x[n : 2 * n], dtype=float), 1e-6, None)
         compute = np.clip(np.array(x[2 * n :], dtype=float), 1e-3, None)
+        min_bw = self.network.total_bandwidth / max(n * 5.0, 1.0)
+        min_power = self.network.total_power / max(n * 8.0, 1.0)
+        bw = np.maximum(bw, min_bw)
+        power = np.maximum(power, min_power)
 
         if bw.sum() > self.network.total_bandwidth:
             bw = bw * (self.network.total_bandwidth / bw.sum())
@@ -347,6 +441,7 @@ class _PSOAllocator(object):
             allocations = self._build_allocations(bw, power, compute)
 
         utilities = []
+        delay_values = []
         penalty = 0.0
 
         for item in allocations:
@@ -356,19 +451,24 @@ class _PSOAllocator(object):
             metric = semantic_metrics_for_user(user, item, self.noise_dbm, self.distance_factor)
             delay_ms = metric["delay_ms"]
             fidelity = metric["fidelity"]
+            delay_values.append(delay_ms)
+            min_bw = self.network.total_bandwidth / max(self.n * 5.0, 1.0)
+            if item.bandwidth < min_bw:
+                penalty += 0.25 * ((min_bw - item.bandwidth) / max(min_bw, 1e-9))
 
             if user.requirement_type == "low_latency":
-                utility = 0.65 * (1.0 / (1.0 + delay_ms / 130.0)) + 0.35 * fidelity
-                if delay_ms <= 130.0:
-                    utility += 0.05
+                delay_score = np.exp(-delay_ms / max(self.delay_ref_ms, 0.25))
+                utility = 0.78 * delay_score + 0.22 * fidelity
+                if delay_ms <= self.delay_ref_ms:
+                    utility += 0.08
                 else:
-                    penalty += 0.02 * ((delay_ms - 130.0) / 130.0)
+                    penalty += 0.35 * ((delay_ms - self.delay_ref_ms) / max(self.delay_ref_ms, 1e-9))
             else:
-                utility = 0.75 * fidelity + 0.25 * (1.0 / (1.0 + delay_ms / 220.0))
-                if fidelity >= 0.6:
-                    utility += 0.05
+                utility = 0.82 * fidelity + 0.18 * np.exp(-delay_ms / max(self.delay_ref_ms * 2.2, 0.5))
+                if fidelity >= 0.72:
+                    utility += 0.06
                 else:
-                    penalty += 0.04 * (0.6 - fidelity)
+                    penalty += 0.10 * (0.72 - fidelity)
 
             utility = utility * (0.7 + 0.3 * similarity)
             utilities.append(utility)
@@ -378,7 +478,9 @@ class _PSOAllocator(object):
 
         fairness = min(utilities)
         avg_utility = sum(utilities) / len(utilities)
-        score = avg_utility + 0.15 * fairness - penalty
+        avg_delay = sum(delay_values) / len(delay_values)
+        delay_bonus = 0.28 * np.exp(-avg_delay / max(self.delay_ref_ms, 0.25))
+        score = avg_utility + 0.15 * fairness + delay_bonus - penalty
         return score, allocations
 
     def update(self, size: int, c1: float, c2: float, w: float):
@@ -423,212 +525,31 @@ def _allocate_user_resources_pso(payload: ResourceAllocationRequestV2) -> Resour
     return _build_response(allocations, payload.network)
 
 
-def _normalize_legacy_vector(payload: ResourceAllocationRequestV2, vector: np.ndarray) -> np.ndarray:
-    x = np.array(vector, dtype=float)
-    x = np.clip(x, 1e-6, None)
-
-    power = x[:3]
-    bandwidth = x[3:]
-
-    total_power = power.sum()
-    total_bandwidth = bandwidth.sum()
-
-    if total_power > payload.network.total_power:
-        power = power * (payload.network.total_power / total_power)
-    if total_bandwidth > payload.network.total_bandwidth:
-        bandwidth = bandwidth * (payload.network.total_bandwidth / total_bandwidth)
-
-    return np.concatenate([power, bandwidth])
-
-
-def _legacy_slice_index_map(payload: ResourceAllocationRequestV2) -> Dict[str, int]:
-    slice_order = []
-    for rel in payload.relations:
-        if rel.matched_slice_id not in slice_order:
-            slice_order.append(rel.matched_slice_id)
-
-    mapping = {}
-    for idx, slice_id in enumerate(slice_order):
-        mapping[slice_id] = idx % 3
-    return mapping
-
-
-def _build_allocations_from_legacy_vector(payload: ResourceAllocationRequestV2, vector: np.ndarray) -> List[UserResourceAllocation]:
-    x = _normalize_legacy_vector(payload, vector)
-    power_slices = x[:3]
-    bandwidth_slices = x[3:]
-
-    rel_map = {rel.user_id: rel for rel in payload.relations}
-    user_groups: Dict[int, List[UserBusinessItem]] = {0: [], 1: [], 2: []}
-
-    slice_map = _legacy_slice_index_map(payload)
-    for user in payload.users:
-        rel = rel_map.get(user.user_id)
-        if rel is None:
-            idx = 0
-        else:
-            idx = slice_map.get(rel.matched_slice_id, 0)
-        user_groups[idx].append(user)
-
-    allocations: List[UserResourceAllocation] = []
-    total_compute = payload.network.cpu_capacity
-
-    for idx in range(3):
-        users = user_groups[idx]
-        if not users:
-            continue
-
-        slice_power = float(power_slices[idx])
-        slice_bandwidth = float(bandwidth_slices[idx])
-        slice_compute = total_compute * (slice_power / max(payload.network.total_power, 1e-9))
-
-        weights = []
-        for user in users:
-            rel = rel_map.get(user.user_id)
-            similarity = rel.similarity_score if rel is not None else 0.6
-            req_weight = 1.4 if user.requirement_type == "low_latency" else 1.2
-            weights.append(max(1e-6, req_weight * (0.7 + 0.3 * similarity)))
-
-        total_weight = sum(weights)
-        for user, weight in zip(users, weights):
-            ratio = weight / total_weight
-            rel = rel_map.get(user.user_id)
-            slice_id = rel.matched_slice_id if rel is not None else "slice-1"
-            item = UserResourceAllocation(
-                user_id=user.user_id,
-                tenant_id=user.tenant_id,
-                slice_id=slice_id,
-                bandwidth=round(slice_bandwidth * ratio, 5),
-                power=round(slice_power * ratio, 5),
-                compute=round(slice_compute * ratio, 5),
-                energy_cost=0.0,
-            )
-            item.energy_cost = round(_energy_cost(item.compute, item.power), 5)
-            allocations.append(item)
-
-    total_energy = sum(item.energy_cost for item in allocations)
-    if total_energy > payload.network.compute_energy_threshold and total_energy > 0:
-        factor = payload.network.compute_energy_threshold / total_energy
-        for item in allocations:
-            item.compute = round(item.compute * factor, 5)
-            item.energy_cost = round(_energy_cost(item.compute, item.power), 5)
-
-    return allocations
-
-
-def _legacy_fitness(payload: ResourceAllocationRequestV2, vector: np.ndarray) -> float:
-    normalized = _normalize_legacy_vector(payload, vector)
-    legacy_vector = [float(normalized[0]), float(normalized[1]), float(normalized[2]), float(normalized[3]), float(normalized[4]), float(normalized[5])]
-
-    score_sum, _, _ = evaluate_legacy_vector(payload.legacy_strategy, payload.legacy_scenario, legacy_vector)
-
-    allocations = _build_allocations_from_legacy_vector(payload, normalized)
-    total_energy = sum(item.energy_cost for item in allocations)
-
-    penalty = 0.0
-    if total_energy > payload.network.compute_energy_threshold:
-        penalty += (total_energy - payload.network.compute_energy_threshold) / max(payload.network.compute_energy_threshold, 1.0)
-
-    profile = CHANNEL_SCENARIOS.get(payload.network.channel_scenario, CHANNEL_SCENARIOS["factory_indoor"])
-    noise_dbm = float(profile["noise_dbm"])
-    distance_factor = float(profile["distance_factor"])
-    user_map = {user.user_id: user for user in payload.users}
-
-    metric_bonus = 0.0
-    for item in allocations:
-        user = user_map.get(item.user_id)
-        if user is None:
-            continue
-        metric = semantic_metrics_for_user(user, item, noise_dbm, distance_factor)
-        if user.requirement_type == "low_latency":
-            metric_bonus += max(0.0, 1.0 - metric["delay_ms"] / 150.0)
-        else:
-            metric_bonus += metric["fidelity"]
-
-    metric_bonus = metric_bonus / max(len(allocations), 1)
-    return float(score_sum + 0.3 * metric_bonus - 0.2 * penalty)
-
-
-def _run_legacy_pso(payload: ResourceAllocationRequestV2) -> np.ndarray:
-    dimension = 6
-    size = max(2, int(payload.legacy_particles))
-    time = max(1, int(payload.legacy_iterations))
-    v_low = -0.1
-    v_high = 0.1
-
-    low = np.array([
-        max(1e-4, payload.network.total_power * 0.001),
-        max(1e-4, payload.network.total_power * 0.001),
-        max(1e-4, payload.network.total_power * 0.001),
-        max(1e-4, payload.network.total_bandwidth * 0.001),
-        max(1e-4, payload.network.total_bandwidth * 0.001),
-        max(1e-4, payload.network.total_bandwidth * 0.001),
-    ], dtype=float)
-
-    up = np.array([
-        max(0.1, payload.network.total_power),
-        max(0.1, payload.network.total_power),
-        max(0.1, payload.network.total_power),
-        max(0.1, payload.network.total_bandwidth),
-        max(0.1, payload.network.total_bandwidth),
-        max(0.1, payload.network.total_bandwidth),
-    ], dtype=float)
-
-    x = np.random.uniform(low, up, (size, dimension))
-    v = np.random.uniform(v_low, v_high, (size, dimension))
-
-    p_best = np.copy(x)
-    p_best_fitness = np.array([-1e18 for _ in range(size)], dtype=float)
-
-    g_best = np.copy(x[0])
-    g_best_fitness = -1e18
-
-    for i in range(size):
-        fitness = _legacy_fitness(payload, x[i])
-        p_best_fitness[i] = fitness
-        if fitness > g_best_fitness:
-            g_best_fitness = fitness
-            g_best = np.copy(x[i])
-
-    for gen in range(time):
-        c1 = 1.5 + np.sin(np.pi / 2 * (1 - (2 * gen / max(time, 1))))
-        c2 = 1.5 + np.sin(np.pi / 2 * ((2 * gen / max(time, 1)) - 1))
-        w = 1.6 - 1.2 * gen / max(time, 1)
-
-        for i in range(size):
-            r1 = np.random.uniform(0, 1, dimension)
-            r2 = np.random.uniform(0, 1, dimension)
-            v[i] = w * v[i] + c1 * r1 * (p_best[i] - x[i]) + c2 * r2 * (g_best - x[i])
-            v[i] = np.clip(v[i], v_low, v_high)
-
-            x[i] = x[i] + v[i]
-            x[i] = np.clip(x[i], low, up)
-
-            current_fitness = _legacy_fitness(payload, x[i])
-            if current_fitness > p_best_fitness[i]:
-                p_best[i] = np.copy(x[i])
-                p_best_fitness[i] = current_fitness
-            if current_fitness > g_best_fitness:
-                g_best = np.copy(x[i])
-                g_best_fitness = current_fitness
-
-    return _normalize_legacy_vector(payload, g_best)
-
-
-def _allocate_user_resources_legacy_experiment(payload: ResourceAllocationRequestV2) -> ResourceAllocationResponseV2:
-    if not payload.users or not payload.relations:
-        return _build_response([], payload.network)
-
-    best_vector = _run_legacy_pso(payload)
-    allocations = _build_allocations_from_legacy_vector(payload, best_vector)
-    return _build_response(allocations, payload.network)
+def _normalize_strategy_name(raw: str) -> str:
+    value = (raw or "semslice").strip().lower()
+    alias = {
+        "pso": "semslice",
+        "semantic": "semslice",
+        "semantic_slice": "semslice",
+        "weighted": "netslice",
+        "latency_first": "netslice",
+        "equal": "noslice",
+        "random": "noslice",
+        "no_slice": "noslice",
+    }
+    return alias.get(value, value)
 
 
 def allocate_user_resources(payload: ResourceAllocationRequestV2) -> ResourceAllocationResponseV2:
-    if payload.allocation_backend == "legacy_experiment":
-        return _allocate_user_resources_legacy_experiment(payload)
-    if payload.algorithm == "pso":
-        return _allocate_user_resources_pso(payload)
-    return _allocate_user_resources_simple(payload)
+    strategy = _normalize_strategy_name(payload.algorithm)
+    if strategy == "semslice":
+        return _allocate_user_resources_semslice(payload)
 
-
+    simple_algorithm = "netslice" if strategy == "netslice" else "equal"
+    simple_payload = ResourceAllocationRequestV2(
+        users=payload.users,
+        relations=payload.relations,
+        network=payload.network,
+        algorithm=simple_algorithm,
+    )
+    return _allocate_user_resources_simple(simple_payload)

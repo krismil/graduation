@@ -18,9 +18,20 @@ from app.models.schemas import (
 
 RANDOM = random.Random(2026)
 CHANNEL_SCENARIOS = {
-    "factory_indoor": {"noise_dbm": -106.0, "distance_factor": 0.85},
-    "satellite_link": {"noise_dbm": -118.0, "distance_factor": 1.8},
-    "urban_macro": {"noise_dbm": -110.5, "distance_factor": 1.15},
+    "factory_indoor": {"noise_dbm": -106.0, "distance_factor": 0.85, "delay_ref_ms": 0.90},
+    "satellite_link": {"noise_dbm": -118.0, "distance_factor": 1.8, "delay_ref_ms": 1.30},
+    "urban_macro": {"noise_dbm": -110.5, "distance_factor": 1.15, "delay_ref_ms": 1.00},
+    # 便于按“信道类型=目标SNR”方式做曲线验证（-6dB 到 12dB）
+    "snr_m6": {"noise_dbm": -104.5, "distance_factor": 1.15, "delay_ref_ms": 1.40},
+    "snr_m4": {"noise_dbm": -106.5, "distance_factor": 1.15, "delay_ref_ms": 1.30},
+    "snr_m2": {"noise_dbm": -108.5, "distance_factor": 1.15, "delay_ref_ms": 1.20},
+    "snr_0": {"noise_dbm": -110.5, "distance_factor": 1.15, "delay_ref_ms": 1.10},
+    "snr_2": {"noise_dbm": -112.5, "distance_factor": 1.15, "delay_ref_ms": 1.00},
+    "snr_4": {"noise_dbm": -114.5, "distance_factor": 1.15, "delay_ref_ms": 0.90},
+    "snr_6": {"noise_dbm": -116.5, "distance_factor": 1.15, "delay_ref_ms": 0.82},
+    "snr_8": {"noise_dbm": -118.5, "distance_factor": 1.15, "delay_ref_ms": 0.76},
+    "snr_10": {"noise_dbm": -120.5, "distance_factor": 1.15, "delay_ref_ms": 0.70},
+    "snr_12": {"noise_dbm": -122.5, "distance_factor": 1.15, "delay_ref_ms": 0.64},
 }
 DOMAIN_BASE_SIMILARITY = {
     "animal": 0.74,

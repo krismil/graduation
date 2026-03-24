@@ -1,90 +1,26 @@
 %%{init: {
   "theme": "base",
   "themeVariables": {
-    "background": "#071622",
-    "primaryTextColor": "#eaf4ff",
-    "lineColor": "#9cc8ff",
+    "background": "#ffffff",
+    "primaryTextColor": "#222222",
+    "lineColor": "#444444",
     "fontFamily": "Microsoft YaHei, Segoe UI, sans-serif"
   }
 }}%%
 
 flowchart TB
-    subgraph L0["L0: 多租户角色层 (RBAC)"]
+    subgraph SYS["系统架构（语义切片资源管理平台）"]
         direction TB
-        ADMIN["运营商管理员 (Admin)<br/>全局网络/切片配置"]
-        TENANT["垂直行业租户 (Tenant)<br/>业务意图下发与结果查看"]
+        B1["L0 角色与权限层<br/>管理员入口（Admin） | 租户入口（Tenant）"]
+        B2["L1 交互与可视化层<br/>控制台界面 | 配置管理 | 可视化组件 | 数据反馈展示 | 策略对比"]
+        B3["L2 网关与流程编排层<br/>RESTful API 网关（FastAPI）<br/>认证与权限管理 | 租户隔离过滤 | 系统级流程编排（admin/tenant run）"]
+        B4["L3 服务算法与数据支撑层<br/>语义通信处理 | 切片构建与分发 | 切片与业务适配 | 资源管理与编排 | 性能评估<br/>Legacy仿真实验适配 | 运行状态缓存 | 结果数据存储"]
     end
 
-    subgraph L1["L1: UI 交互与可视化层 (Frontend)"]
-        direction LR
-        UI["控制台入口<br/>frontend/index.html + app.js"]
-        PANEL_CFG["业务/网络/切片配置面板"]
-        PANEL_VIEW["资源、时延、保真度图表面板"]
-        PANEL_CMP["三策略对比面板<br/>SemSlice / NetSlice / Random"]
-    end
+    B1 --> B2
+    B2 --> B3
+    B3 --> B4
 
-    subgraph L2["L2: API 网关与鉴权编排层 (FastAPI)"]
-        direction LR
-        ROUTES["REST API 网关<br/>backend/app/api/routes.py"]
-        AUTH["认证与权限模块<br/>auth_service.py"]
-        FILTER["租户隔离过滤器<br/>tenant scope"]
-        WORKFLOW["模块化工作流编排<br/>/system/admin/run /tenant/run"]
-    end
-
-    subgraph L3["L3: 语义切片与资源算法层 (Services)"]
-        direction LR
-        SEM["语义通信处理<br/>semantic_service.py<br/>SNR/时延/语义保真估计"]
-        SLC["切片构建与分发<br/>slicing_service.py"]
-        ADP["切片与业务适配<br/>adaptation_service.py"]
-        ORC["资源编排引擎<br/>orchestration_service.py<br/>online_pso / legacy_experiment / weighted"]
-        EVA["性能评估模块<br/>evaluation_service.py<br/>Delay/SS/S-SE/Energy"]
-    end
-
-    subgraph L4["L4: Legacy 仿真实验与状态层"]
-        direction LR
-        LEGACY["legacy_adapter.py<br/>main_compute 适配与三策略对比"]
-        DEEPSC["DeepSC-master 脚本集<br/>sem_slice_*.py / pso_*.py"]
-        STATE["运行状态存储<br/>store/state.py"]
-    end
-
-    ADMIN -.配置下发.-> UI
-    TENANT -.业务意图.-> UI
-
-    UI --> PANEL_CFG
-    UI --> PANEL_VIEW
-    UI --> PANEL_CMP
-    UI -->|JSON 请求| ROUTES
-
-    ROUTES --> AUTH
-    AUTH --> FILTER
-    FILTER --> WORKFLOW
-
-    WORKFLOW --> SEM
-    WORKFLOW --> SLC
-    WORKFLOW --> ADP
-    WORKFLOW --> ORC
-    WORKFLOW --> EVA
-
-    ORC -->|实验后端调用| LEGACY
-    LEGACY --> DEEPSC
-    WORKFLOW --> STATE
-
-    SEM -->|结构化结果| EVA
-    SLC -->|切片配置| ADP
-    ADP -->|用户-切片关系| ORC
-    ORC -->|功率/带宽/计算矩阵| EVA
-    EVA -->|QoS/时延/保真反馈| UI
-
-    classDef role fill:#26384a,stroke:#9cd6ff,color:#eaf6ff,stroke-width:1.2px;
-    classDef ui fill:#174336,stroke:#7de3bf,color:#edfff8,stroke-width:1.2px;
-    classDef api fill:#5a3e16,stroke:#ffcf85,color:#fff4df,stroke-width:1.2px;
-    classDef svc fill:#342a63,stroke:#bfa8ff,color:#f2ecff,stroke-width:1.2px;
-    classDef legacy fill:#5a2525,stroke:#ff9f9f,color:#ffecec,stroke-width:1.2px;
-    classDef state fill:#20343a,stroke:#8fd3e0,color:#eafcff,stroke-width:1.2px;
-
-    class ADMIN,TENANT role;
-    class UI,PANEL_CFG,PANEL_VIEW,PANEL_CMP ui;
-    class ROUTES,AUTH,FILTER,WORKFLOW api;
-    class SEM,SLC,ADP,ORC,EVA svc;
-    class LEGACY,DEEPSC legacy;
-    class STATE state;
+    style SYS fill:#e8e8e8,stroke:#444444,stroke-width:2px
+    classDef box fill:#eeeeee,stroke:#4a4a4a,color:#222222,stroke-width:1.2px;
+    class B1,B2,B3,B4 box;

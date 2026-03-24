@@ -109,23 +109,9 @@ class WorkflowResponse(BaseModel):
     evaluation: EvaluationResponse
 
 
-class LegacyRunRequest(BaseModel):
-    strategy: str = "semslice"
-    scenario: str = "fitSNR"
-    resource_vector: List[float] = Field(default_factory=lambda: [0.2, 0.3, 0.5, 0.6, 0.8, 0.6])
-
-
-class LegacyRunResponse(BaseModel):
-    success: bool
-    result: Optional[Dict[str, Union[float, str, List[float], dict]]] = None
-    error: Optional[str] = None
-
-
-
 class LegacyStrategyCompareRequest(BaseModel):
     scenario: str = "fitSNR"
     resource_vector: List[float] = Field(default_factory=lambda: [0.2, 0.3, 0.5, 0.6, 0.8, 0.6])
-    compare_mode: str = "paper_sim"
 
 
 class LegacyStrategyPoint(BaseModel):
@@ -273,12 +259,7 @@ class ResourceAllocationRequestV2(BaseModel):
     users: List[UserBusinessItem]
     relations: List[AdaptationRow]
     network: NetworkConfig
-    algorithm: str = "pso"
-    allocation_backend: str = "online_pso"
-    legacy_strategy: str = "semslice"
-    legacy_scenario: str = "fitSNR"
-    legacy_iterations: int = 2
-    legacy_particles: int = 2
+    algorithm: str = "semslice"
 
 
 class ResourceAllocationResponseV2(BaseModel):
@@ -292,6 +273,7 @@ class PerformanceEvaluateRequest(BaseModel):
     users: List[UserBusinessItem]
     allocations: List[UserResourceAllocation]
     network: NetworkConfig
+    relations: List[AdaptationRow] = Field(default_factory=list)
 
 
 class PerformanceEvaluateResponse(BaseModel):
@@ -305,12 +287,7 @@ class FullSystemRequest(BaseModel):
     network: NetworkConfig
     slicing: SliceConfigRequest
     adaptation_method: str = "similarity"
-    allocation_algorithm: str = "pso"
-    allocation_backend: str = "online_pso"
-    legacy_strategy: str = "semslice"
-    legacy_scenario: str = "fitSNR"
-    legacy_iterations: int = 2
-    legacy_particles: int = 2
+    allocation_algorithm: str = "semslice"
 
 
 class FullSystemResponse(BaseModel):
@@ -325,10 +302,10 @@ class FullSystemResponse(BaseModel):
 class WorkflowState(BaseModel):
     last_run: Optional[WorkflowResponse] = None
     last_new_run: Optional[FullSystemResponse] = None
-
-
-
-
-
+    network_configured: bool = False
+    slicing_configured: bool = False
+    admin_config_ready: bool = False
+    admin_task_board: List[Dict[str, Union[str, float, bool]]] = Field(default_factory=list)
+    pending_tasks: List[Dict[str, Union[str, float, bool, int]]] = Field(default_factory=list)
 
 

@@ -1,81 +1,30 @@
-﻿const state = {
+const state = {
   token: null,
   role: null,
   user: null,
-  businessOutput: null,
-  networkOutput: null,
-  slicingOutput: null,
-  adaptationOutput: null,
-  allocationOutput: null,
-  performanceOutput: null,
+  adminResult: null,
+  tenantResult: null,
 };
 
-const outputBox = document.getElementById("outputBox");
-const metricCards = document.getElementById("metricCards");
-const fidelityChart = document.getElementById("fidelityChart");
-const delayChart = document.getElementById("delayChart");
-const remainingPieChart = document.getElementById("remainingPieChart");
-const resourceBreakdown = document.getElementById("resourceBreakdown");
-const remainingPieLegend = document.getElementById("remainingPieLegend");
+const tenantTasks = [];
+let tenantTaskSeq = 1;
+let adminRealtimeTimer = null;
+let adminRealtimeDigest = "";
 
-const compareScenario = document.getElementById("compareScenario");
-const compareVector = document.getElementById("compareVector");
-const legacyDelayChart = document.getElementById("legacyDelayChart");
-const legacySSChart = document.getElementById("legacySSChart");
-const legacySSEChart = document.getElementById("legacySSEChart");
-const globalStatus = document.getElementById("globalStatus");
-const sidebarRole = document.getElementById("sidebarRole");
-const sidebarUser = document.getElementById("sidebarUser");
-
-let activePanelId = "panel-auth";
+function byId(id) {
+  return document.getElementById(id);
+}
 
 function apiBase() {
-  return document.getElementById("apiBase").value.replace(/\/$/, "");
+  return byId("apiBase").value.replace(/\/$/, "");
 }
 
-function logOutput(title, data) {
-  if (!outputBox) return;
-  outputBox.textContent = `${title}\n${JSON.stringify(data, null, 2)}`;
+function setText(id, text) {
+  const el = byId(id);
+  if (el) el.textContent = text;
 }
 
-function setStatus(id, text) {
-  const node = document.getElementById(id);
-  if (!node) return;
-  node.textContent = text;
-}
-
-function setGlobalStatus(text, tone = "idle") {
-  if (!globalStatus) return;
-  globalStatus.textContent = text;
-  globalStatus.dataset.tone = tone;
-}
-
-function activatePanel(panelId) {
-  activePanelId = panelId;
-  document.querySelectorAll("[data-panel]").forEach((panel) => {
-    panel.classList.toggle("panel-hidden", panel.id !== panelId);
-  });
-  document.querySelectorAll(".nav-btn[data-target]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.target === panelId);
-  });
-}
-
-function bindNavigation() {
-  const navButtons = document.querySelectorAll(".nav-btn[data-target]");
-  navButtons.forEach((button) => {
-    button.addEventListener("click", () => activatePanel(button.dataset.target));
-  });
-  activatePanel(activePanelId);
-}
-
-function parseJsonInput(raw, fallback) {
-  if (!raw || !raw.trim()) {
-    return fallback;
-  }
-  return JSON.parse(raw);
-}
-
-async function callApi(path, body, method = "POST") {
+async function callApi(path, body = null, method = "POST") {
   const headers = { "Content-Type": "application/json" };
   if (state.token) {
     headers.Authorization = `Bearer ${state.token}`;
@@ -88,641 +37,606 @@ async function callApi(path, body, method = "POST") {
 
   const response = await fetch(`${apiBase()}${path}`, options);
   if (!response.ok) {
-    const text = await response.text();
+    let text = await response.text();
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed.detail === "string") {
+        text = parsed.detail;
+      }
+    } catch (_error) {
+      // keep raw text
+    }
     throw new Error(`HTTP ${response.status}: ${text}`);
   }
   return response.json();
 }
 
-function currentBusinessPayload() {
-  let users = [];
-  try {
-    users = parseJsonInput(document.getElementById("usersJson").value, []);
-  } catch (error) {
-    throw new Error(`用户列表 JSON 解析失败: ${error.message}`);
-  }
-
-  return {
-    user_count: Number(document.getElementById("userCount").value || 1),
-    modality: "text",
-    default_requirement_type: document.getElementById("defaultRequirement").value,
-    default_domain_type: document.getElementById("defaultDomain").value,
-    tenant_id: document.getElementById("tenantId").value || "tenant-1",
-    users,
-  };
-}
-
-function currentNetworkPayload() {
-  return {
-    cpu_capacity: Number(document.getElementById("cpuCapacity").value || 100),
-    compute_energy_threshold: Number(document.getElementById("energyThreshold").value || 500),
-    total_bandwidth: Number(document.getElementById("totalBandwidth").value || 2),
-    total_power: Number(document.getElementById("totalPower").value || 1),
-    channel_scenario: document.getElementById("channelScenario").value,
-  };
-}
-
-function currentSlicePayload() {
-  const names = (document.getElementById("sliceNames").value || "")
-    .split(",")
-    .map((x) => x.trim())
-    .filter(Boolean);
-  let knowledgeBases = [];
-  try {
-    knowledgeBases = parseJsonInput(document.getElementById("kbJson").value, []);
-  } catch (error) {
-    throw new Error(`知识库 JSON 解析失败: ${error.message}`);
-  }
-
-  return {
-    slice_count: Number(document.getElementById("sliceCount").value || 1),
-    slice_names: names,
-    codec_count: Number(document.getElementById("codecCount").value || 1),
-    codec_modality: "text",
-    knowledge_bases: knowledgeBases,
-  };
-}
-
-function adaptationMethod() {
-  return document.getElementById("adaptMethod").value;
-}
-
-function allocationAlgorithm() {
-  return document.getElementById("allocAlgorithm").value;
-}
-
-function allocationBackend() {
-  const element = document.getElementById("allocationBackend");
-  return element ? element.value : "online_pso";
-}
-
-function legacyStrategy() {
-  const element = document.getElementById("legacyStrategy");
-  return element ? element.value : "semslice";
-}
-
-function legacyScenario() {
-  const element = document.getElementById("legacyScenario");
-  return element ? element.value : "fitSNR";
-}
-
-function legacyIterations() {
-  const element = document.getElementById("legacyIterations");
-  return element ? Number(element.value || 2) : 2;
-}
-
-function legacyParticles() {
-  const element = document.getElementById("legacyParticles");
-  return element ? Number(element.value || 2) : 2;
-}
-
-
-function parseCompareVector(raw) {
-  const fallback = [0.2, 0.3, 0.5, 0.6, 0.8, 0.6];
-  if (!raw || !raw.trim()) {
-    return fallback;
-  }
-  const values = raw
-    .split(",")
-    .map((item) => Number(item.trim()))
-    .filter((item) => Number.isFinite(item));
-  return values.length >= 6 ? values.slice(0, 6) : fallback;
-}
-
-function renderLegacyCompareSummary(comparisons) {
-  const rows = (comparisons || []).map((item) => ({
-    strategy: item.strategy,
-    avg_delay_ms: item.avg_delay_ms === null || item.avg_delay_ms === undefined ? "-" : Number(item.avg_delay_ms).toFixed(4),
-    avg_ss: item.avg_ss === null || item.avg_ss === undefined ? "-" : Number(item.avg_ss).toFixed(4),
-    avg_s_se: item.avg_s_se === null || item.avg_s_se === undefined ? "-" : Number(item.avg_s_se).toFixed(6),
-    score_sum: item.score_sum === null || item.score_sum === undefined ? "-" : Number(item.score_sum).toFixed(4),
-    status: item.error ? `失败: ${item.error}` : "成功",
-  }));
-  renderTable("legacyCompareSummary", rows);
-}
-
-function renderLegacyAverageCharts(comparisons) {
-  const ok = (comparisons || []).filter((item) => !item.error);
-
-  const delayRows = ok.map((item) => ({ label: item.strategy, value: Number(item.avg_delay_ms || 0) }));
-  const ssRows = ok.map((item) => ({ label: item.strategy, value: Number(item.avg_ss || 0) }));
-  const sseRows = ok.map((item) => ({ label: item.strategy, value: Number(item.avg_s_se || 0) }));
-
-  renderBars(legacyDelayChart, delayRows, "value");
-  renderBars(legacySSChart, ssRows, "value", 1);
-  renderBars(legacySSEChart, sseRows, "value", 1);
-}
-
-function renderLegacyDelayTaskTable(comparisons) {
-  const taskMap = {};
-  (comparisons || []).forEach((item) => {
-    if (item.error || !item.points) {
-      return;
-    }
-    item.points.forEach((point) => {
-      const taskId = Number(point.task_id);
-      if (!taskMap[taskId]) {
-        taskMap[taskId] = { task_id: taskId };
-      }
-      taskMap[taskId][item.strategy] = Number(point.delay_ms || 0).toFixed(4);
-    });
-  });
-
-  const rows = Object.keys(taskMap)
-    .map((key) => Number(key))
-    .sort((a, b) => a - b)
-    .map((taskId) => {
-      const row = taskMap[taskId];
-      return {
-        task_id: row.task_id,
-        semslice_delay_ms: row.semslice || "-",
-        netslice_delay_ms: row.netslice || "-",
-        random_delay_ms: row.random || "-",
-      };
-    });
-
-  renderTable("legacyDelayTaskTable", rows);
-}
-
-async function runLegacyCompare() {
-  const scenario = compareScenario ? compareScenario.value : "fitSNR";
-  const resourceVector = parseCompareVector(compareVector ? compareVector.value : "");
-  const result = await callApi("/analysis/legacy/strategy-compare", {
-    scenario,
-    resource_vector: resourceVector,
-  });
-
-  const okCount = (result.comparisons || []).filter((item) => !item.error).length;
-  setStatus("legacyCompareStatus", `对比场景 ${result.scenario}，成功策略 ${okCount}/3`);
-
-  renderLegacyCompareSummary(result.comparisons);
-  renderLegacyAverageCharts(result.comparisons);
-  renderLegacyDelayTaskTable(result.comparisons);
-  setGlobalStatus("三策略对比完成", "ok");
-  activatePanel("panel-compare");
-
-  logOutput("源仓库三策略对比输出", result);
-}
-
-function ensureRemainingPieNodes() {
-  let chart = document.getElementById("remainingPieChart");
-  let legend = document.getElementById("remainingPieLegend");
-  if (chart && legend) {
-    return { chart, legend };
-  }
-
-  const anchor = document.getElementById("allocationTable");
-  const panelParent = anchor ? anchor.parentElement : null;
-  if (!panelParent) {
-    return { chart: null, legend: null };
-  }
-
-  let panel = panelParent.querySelector(".pie-panel");
-  if (!panel) {
-    const title = document.createElement("h3");
-    title.textContent = "当前剩余资源";
-    panel = document.createElement("div");
-    panel.className = "pie-panel";
-    anchor.insertAdjacentElement("afterend", title);
-    title.insertAdjacentElement("afterend", panel);
-  }
-
-  chart = document.getElementById("remainingPieChart");
-  legend = document.getElementById("remainingPieLegend");
-
-  if (!chart) {
-    chart = document.createElement("div");
-    chart.id = "remainingPieChart";
-    chart.className = "remaining-pie";
-    panel.appendChild(chart);
-  }
-  if (!legend) {
-    legend = document.createElement("div");
-    legend.id = "remainingPieLegend";
-    legend.className = "remaining-legend";
-    panel.appendChild(legend);
-  }
-
-  return { chart, legend };
-}
-
-function renderRemainingPie(result) {
-  const nodes = ensureRemainingPieNodes();
-  const chart = nodes.chart;
-  const legendRoot = nodes.legend;
-  if (!chart || !legendRoot) {
-    return;
-  }
-
-  const used = result.used_resources || {};
-  const remain = result.remaining_resources || {};
-  const items = [
-    { key: "bandwidth", label: "带宽", color: "#0f766e" },
-    { key: "power", label: "功率", color: "#14b8a6" },
-    { key: "compute", label: "计算", color: "#0ea5e9" },
-    { key: "energy", label: "能耗预算", color: "#22c55e" },
-  ];
-
-  const rows = items.map((item) => {
-    const usedValue = Number(used[item.key] || 0);
-    const remainValue = Number(remain[item.key] || 0);
-    const totalValue = usedValue + remainValue;
-    const ratio = totalValue > 0 ? remainValue / totalValue : 0;
-    return {
-      ...item,
-      remainValue,
-      ratio,
-    };
-  });
-
-  const ratioSum = rows.reduce((sum, row) => sum + row.ratio, 0);
-  const normalized = ratioSum > 0
-    ? rows.map((row) => ({ ...row, weight: row.ratio / ratioSum }))
-    : rows.map((row) => ({ ...row, weight: 0.25 }));
-
-  let start = 0;
-  const segments = normalized
-    .map((row) => {
-      const end = start + row.weight * 360;
-      const part = `${row.color} ${start.toFixed(2)}deg ${end.toFixed(2)}deg`;
-      start = end;
-      return part;
-    })
-    .join(", ");
-
-  chart.innerHTML = `<div class="pie-circle" style="background: conic-gradient(${segments});"></div>`;
-
-  const legend = normalized
-    .map((row) => `<div class="legend-item"><span class="legend-dot" style="background:${row.color}"></span><span>${row.label}：${row.remainValue.toFixed(5)}（剩余率 ${(row.ratio * 100).toFixed(2)}%）</span></div>`)
-    .join("");
-  legendRoot.innerHTML = legend;
-}
-
-function renderRoleView() {
-  const isAdmin = state.role === "admin";
-  document.querySelectorAll(".admin-only").forEach((section) => {
-    section.classList.toggle("hidden", !isAdmin);
-  });
-
-  if (sidebarRole) {
-    if (!state.role) sidebarRole.textContent = "访客模式";
-    else sidebarRole.textContent = isAdmin ? "管理员系统" : "租户系统";
-  }
-  if (sidebarUser) {
-    sidebarUser.textContent = state.user ? `${state.user.username}` : "未登录";
+function stopAdminRealtimePolling() {
+  if (adminRealtimeTimer) {
+    clearInterval(adminRealtimeTimer);
+    adminRealtimeTimer = null;
   }
 }
 
 function renderTable(targetId, rows) {
-  const target = document.getElementById(targetId);
-  if (!target) {
-    console.warn(`[renderTable] target not found: ${targetId}`);
-    return;
-  }
+  const root = byId(targetId);
+  if (!root) return;
   if (!rows || !rows.length) {
-    target.innerHTML = '<div class="status">暂无数据</div>';
+    root.innerHTML = '<div class="status">暂无数据</div>';
     return;
   }
 
   const keys = Object.keys(rows[0]);
-  const head = keys.map((key) => `<th>${key}</th>`).join("");
+  const head = keys.map((k) => `<th>${k}</th>`).join("");
   const body = rows
-    .map((row) => `<tr>${keys.map((key) => `<td>${row[key]}</td>`).join("")}</tr>`)
+    .map((row) => `<tr>${keys.map((k) => `<td>${row[k] ?? "-"}</td>`).join("")}</tr>`)
     .join("");
 
-  target.innerHTML = `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  root.innerHTML = `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
-function renderBars(root, rows, valueKey, maxValue = null) {
+function renderBars(targetId, rows, key, maxValue = null) {
+  const root = byId(targetId);
   if (!root) return;
-  root.innerHTML = "";
   if (!rows || !rows.length) {
-    root.textContent = "暂无数据";
+    root.innerHTML = '<div class="status">暂无数据</div>';
     return;
   }
-  const max = maxValue || Math.max(...rows.map((row) => Number(row[valueKey])), 1);
-  rows.forEach((row) => {
-    const value = Number(row[valueKey] || 0);
-    const pct = Math.max(0, Math.min(100, (value / max) * 100));
-    const label = row.label || row.user_id || row.step || "item";
-    const bar = document.createElement("div");
-    bar.className = "bar-row";
-    bar.innerHTML = `
-      <div>${label}</div>
-      <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
-      <div>${value.toFixed(4)}</div>
-    `;
-    root.appendChild(bar);
-  });
-}
 
-function renderMetrics(metrics) {
-  if (!metricCards) return;
-  metricCards.innerHTML = "";
-  Object.keys(metrics || {}).forEach((key) => {
-    const card = document.createElement("div");
-    card.className = "card";
-    card.innerHTML = `<div class="name">${key}</div><div class="value">${metrics[key]}</div>`;
-    metricCards.appendChild(card);
-  });
-}
-
-function renderResourceBreakdown(result) {
-  if (!resourceBreakdown) {
-    return;
-  }
-  const used = result.used_resources || {};
-  const remain = result.remaining_resources || {};
-  const rows = [
-    { item: "带宽", used: used.bandwidth || 0, remaining: remain.bandwidth || 0 },
-    { item: "功率", used: used.power || 0, remaining: remain.power || 0 },
-    { item: "计算", used: used.compute || 0, remaining: remain.compute || 0 },
-    { item: "能耗预算", used: used.energy || 0, remaining: remain.energy || 0 },
-  ];
-
-  const head = "<tr><th>资源项</th><th>已使用</th><th>剩余</th></tr>";
-  const body = rows
-    .map((row) => `<tr><td>${row.item}</td><td>${Number(row.used).toFixed(5)}</td><td>${Number(row.remaining).toFixed(5)}</td></tr>`)
+  const max = maxValue || Math.max(...rows.map((r) => Number(r[key] || 0)), 1);
+  root.innerHTML = rows
+    .map((row) => {
+      const value = Number(row[key] || 0);
+      const pct = Math.max(0, Math.min(100, (value / max) * 100));
+      return `
+        <div class="bar-row">
+          <div>${row.label || "-"}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+          <div>${value.toFixed(4)}</div>
+        </div>
+      `;
+    })
     .join("");
+}
 
-  resourceBreakdown.innerHTML = `<div class="table-wrap"><table><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+function renderUnifiedCompareChart(comparisons) {
+  const root = byId("adminUnifiedCompare");
+  if (!root) return;
+  if (!comparisons || !comparisons.length) {
+    root.innerHTML = '<div class="status">暂无可对比数据</div>';
+    return;
+  }
+
+  const metrics = [
+    { key: "avg_delay_ms", title: "平均时延 (ms)", digits: 3 },
+    { key: "avg_ss", title: "平均 SS", digits: 4 },
+    { key: "avg_s_se", title: "平均 S-SE", digits: 5 },
+  ];
+  const labels = {
+    semslice: "语义切片",
+    netslice: "网络切片",
+    random: "无切片",
+    noslice: "无切片",
+  };
+
+  root.innerHTML = metrics
+    .map((metric) => {
+      const vals = comparisons.map((row) => Number(row[metric.key] || 0));
+      const maxVal = Math.max(...vals, 1e-9);
+      const bars = comparisons
+        .map((row) => {
+          const strategy = String(row.strategy || "").toLowerCase();
+          const strategyClass = strategy === "random" ? "noslice" : strategy;
+          const value = Number(row[metric.key] || 0);
+          const height = Math.max(8, (value / maxVal) * 120);
+          return `
+            <div class="metric-bar-item">
+              <div class="metric-bar ${strategyClass}" style="height:${height.toFixed(1)}px"></div>
+              <div class="metric-label">${labels[strategy] || strategy}</div>
+              <div class="metric-value">${value.toFixed(metric.digits)}</div>
+            </div>
+          `;
+        })
+        .join("");
+
+      return `
+        <div class="metric-compare-card">
+          <div class="metric-compare-title">${metric.title}</div>
+          <div class="metric-compare-bars">${bars}</div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function networkPayloadFromForm() {
+  return {
+    cpu_capacity: Number(byId("cpuCapacity").value || 120),
+    compute_energy_threshold: Number(byId("energyThreshold").value || 650),
+    total_bandwidth: Number(byId("totalBandwidth").value || 2.4),
+    total_power: Number(byId("totalPower").value || 1.2),
+    channel_scenario: byId("channelScenario").value,
+  };
+}
+
+function slicePayloadFromForm() {
+  const names = (byId("sliceNames").value || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  let knowledge = [];
+  try {
+    knowledge = JSON.parse(byId("kbJson").value || "[]");
+  } catch (error) {
+    throw new Error(`知识库配置解析失败: ${error.message}`);
+  }
+  return {
+    slice_count: Number(byId("sliceCount").value || 3),
+    slice_names: names,
+    codec_count: Number(byId("codecCount").value || 3),
+    codec_modality: byId("codecModality").value || "text",
+    knowledge_bases: knowledge,
+  };
+}
+
+function showViewByRole() {
+  byId("loginView").classList.add("hidden");
+  byId("loginView").style.display = "none";
+  byId("appView").classList.remove("hidden");
+  byId("appView").style.display = "";
+
+  const isAdmin = state.role === "admin";
+  if (isAdmin) {
+    startAdminRealtimePolling();
+  } else {
+    stopAdminRealtimePolling();
+  }
+  byId("activeCount").classList.toggle("hidden", !isAdmin);
+  byId("adminView").classList.toggle("hidden", !isAdmin);
+  byId("tenantView").classList.toggle("hidden", isAdmin);
+  setText("pageTitle", isAdmin ? "管理员仪表盘" : "租户任务中心");
+  setText("sessionText", `当前登录：${state.user.username}（${state.role}）`);
+}
+
+function resetToLogin() {
+  state.token = null;
+  state.role = null;
+  state.user = null;
+  state.adminResult = null;
+  state.tenantResult = null;
+  tenantTasks.length = 0;
+  tenantTaskSeq = 1;
+  adminRealtimeDigest = "";
+  stopAdminRealtimePolling();
+
+  byId("appView").classList.add("hidden");
+  byId("appView").style.display = "none";
+  byId("loginView").classList.remove("hidden");
+  byId("loginView").style.display = "";
+  setText("loginStatus", "未登录");
+}
+
+async function refreshAuthStats() {
+  try {
+    const stats = await callApi("/auth/stats", null, "GET");
+    setText("activeCount", `在线租户 ${stats.active_tenant_count || 0}`);
+  } catch (_error) {
+    setText("activeCount", "在线租户 -");
+  }
 }
 
 async function login() {
   const payload = {
-    username: document.getElementById("username").value,
-    password: document.getElementById("password").value,
-    system_type: document.getElementById("systemType").value,
+    username: byId("username").value,
+    password: byId("password").value,
+    system_type: byId("systemType").value,
   };
   const result = await callApi("/auth/login", payload);
   state.token = result.token;
   state.role = result.role;
   state.user = result;
-  renderRoleView();
-  setStatus("loginStatus", `已登录：${result.username}（${result.role}）`);
-  setGlobalStatus(`当前会话：${result.username}`, "ok");
-  activatePanel("panel-business");
-  logOutput("登录成功", result);
+  setText("loginStatus", `登录成功：${result.username}`);
+  showViewByRole();
+  await refreshAuthStats();
+
+  if (state.role === "admin") {
+    await loadAdminExample();
+    await syncAdminConfigStatus();
+    await pullAdminRealtimeTasks();
+    await refreshAdminUnifiedCompare();
+  }
 }
 
 async function logout() {
-  if (state.token) {
-    await callApi("/auth/logout", {}, "POST");
+  try {
+    if (state.token) await callApi("/auth/logout", {}, "POST");
+  } finally {
+    resetToLogin();
   }
-  state.token = null;
-  state.role = null;
-  state.user = null;
-  renderRoleView();
-  setStatus("loginStatus", "未登录");
-  setGlobalStatus("系统待配置", "idle");
-  activatePanel("panel-auth");
-  logOutput("已退出登录", { success: true });
 }
 
-async function loadExample() {
-  const data = await callApi("/workflow/example", null, "GET");
+async function loadAdminExample() {
+  try {
+    const data = await callApi("/workflow/example", null, "GET");
+    const network = data.network || {};
+    const slicing = data.slicing || {};
 
-  document.getElementById("userCount").value = data.business.user_count;
-  document.getElementById("tenantId").value = data.business.tenant_id;
-  document.getElementById("defaultRequirement").value = data.business.default_requirement_type;
-  document.getElementById("defaultDomain").value = data.business.default_domain_type;
+    byId("cpuCapacity").value = network.cpu_capacity ?? 120;
+    byId("energyThreshold").value = network.compute_energy_threshold ?? 650;
+    byId("totalBandwidth").value = network.total_bandwidth ?? 2.4;
+    byId("totalPower").value = network.total_power ?? 1.2;
+    byId("channelScenario").value = network.channel_scenario || "factory_indoor";
 
-  document.getElementById("cpuCapacity").value = data.network.cpu_capacity;
-  document.getElementById("energyThreshold").value = data.network.compute_energy_threshold;
-  document.getElementById("totalBandwidth").value = data.network.total_bandwidth;
-  document.getElementById("totalPower").value = data.network.total_power;
-  document.getElementById("channelScenario").value = data.network.channel_scenario;
-
-  document.getElementById("sliceCount").value = data.slicing.slice_count;
-  document.getElementById("sliceNames").value = data.slicing.slice_names.join(",");
-  document.getElementById("codecCount").value = data.slicing.codec_count;
-  document.getElementById("kbJson").value = JSON.stringify(data.slicing.knowledge_bases, null, 2);
-
-  if (data.allocation_algorithm) {
-    document.getElementById("allocAlgorithm").value = data.allocation_algorithm;
+    byId("sliceCount").value = slicing.slice_count ?? 3;
+    byId("sliceNames").value = (slicing.slice_names || []).join(",");
+    byId("codecCount").value = slicing.codec_count ?? 3;
+    byId("kbJson").value = JSON.stringify(slicing.knowledge_bases || [], null, 2);
+  } catch (_error) {
+    setText("adminConfigStatus", "示例加载失败，可继续手动配置");
   }
-  if (data.allocation_backend && document.getElementById("allocationBackend")) {
-    document.getElementById("allocationBackend").value = data.allocation_backend;
-  }
-  if (data.legacy_strategy && document.getElementById("legacyStrategy")) {
-    document.getElementById("legacyStrategy").value = data.legacy_strategy;
-  }
-  if (data.legacy_scenario && document.getElementById("legacyScenario")) {
-    document.getElementById("legacyScenario").value = data.legacy_scenario;
-  }
-
-  logOutput("示例已加载", data);
 }
 
-async function runBusinessConfig() {
-  const result = await callApi("/module/business/config", currentBusinessPayload());
-  state.businessOutput = result;
-  setStatus("businessSummary", `业务用户数：${result.summary.user_count}，模态：${result.summary.modality}`);
-  document.getElementById("usersJson").value = JSON.stringify(result.users, null, 2);
-  setGlobalStatus("\u4e1a\u52a1\u914d\u7f6e\u5b8c\u6210", "ok");
-  activatePanel("panel-network");
-  logOutput("业务配置输出", result);
-}
-
-async function runNetworkConfig() {
-  const result = await callApi("/module/network/config", currentNetworkPayload());
-  state.networkOutput = result;
-  setStatus("networkSummary", `场景：${result.network.channel_scenario}，噪声：${result.network.noise_dbm} dBm`);
-  setGlobalStatus("\u7f51\u7edc\u914d\u7f6e\u5b8c\u6210", "ok");
-  activatePanel("panel-slice");
-  logOutput("网络配置输出", result);
-}
-
-async function runSliceConfig() {
-  const result = await callApi("/module/slice/config", currentSlicePayload());
-  state.slicingOutput = result;
-  setStatus("sliceSummary", `生成切片：${result.slices.length}，编解码器：${result.codecs.length}`);
-  setGlobalStatus("\u5207\u7247\u914d\u7f6e\u5b8c\u6210", "ok");
-  activatePanel("panel-adapt");
-  logOutput("切片配置输出", result);
-}
-
-async function runAdaptation() {
-  if (!state.businessOutput) {
-    await runBusinessConfig();
-  }
-  if (!state.slicingOutput) {
-    if (state.role === "admin") {
-      await runSliceConfig();
+async function syncAdminConfigStatus() {
+  try {
+    const cfg = await callApi("/system/config/status", null, "GET");
+    if (cfg.admin_config_ready) {
+      setText("adminConfigStatus", "已发布：网络与切片配置已生效");
+      setText("adminSliceStatus", "切片配置已发布，租户可提交运行任务");
+    } else if (cfg.network_configured || cfg.slicing_configured) {
+      setText("adminConfigStatus", "部分已发布：请同时发布网络与切片");
     } else {
-      throw new Error("租户请先让管理员配置切片，或先执行一次系统运行");
+      setText("adminConfigStatus", "待发布：请先发布网络与切片配置");
     }
+  } catch (_error) {
+    setText("adminConfigStatus", "配置状态读取失败");
   }
-
-  const result = await callApi("/module/adaptation", {
-    users: state.businessOutput.users,
-    slices: state.slicingOutput.slices,
-    method: adaptationMethod(),
-  });
-  state.adaptationOutput = result;
-  renderTable("adaptTable", result.relations);
-  setGlobalStatus("\u4e1a\u52a1\u9002\u914d\u5b8c\u6210", "ok");
-  activatePanel("panel-resource");
-  logOutput("切片与业务适配输出", result);
 }
 
-async function runAllocation() {
-  if (!state.adaptationOutput) {
-    await runAdaptation();
-  }
+async function publishAdminConfig() {
+  const network = await callApi("/module/network/config", networkPayloadFromForm());
+  const slicing = await callApi("/module/slice/config", slicePayloadFromForm());
+  const sliceCount = (slicing.slices || []).length;
+  setText("adminSliceStatus", `切片已发布：共 ${sliceCount} 个切片实例`);
+  setText("adminConfigStatus", `发布成功：场景 ${network.network.channel_scenario}，租户端已可运行`);
+  await syncAdminConfigStatus();
+}
 
-  const network = state.networkOutput
-    ? {
-        cpu_capacity: state.networkOutput.network.cpu_capacity,
-        compute_energy_threshold: state.networkOutput.network.compute_energy_threshold,
-        total_bandwidth: state.networkOutput.network.total_bandwidth,
-        total_power: state.networkOutput.network.total_power,
-        channel_scenario: state.networkOutput.network.channel_scenario,
-      }
-    : currentNetworkPayload();
-
-  const result = await callApi("/module/resources/allocate", {
-    users: state.businessOutput.users,
-    relations: state.adaptationOutput.relations,
-    network,
-    algorithm: allocationAlgorithm(),
-    allocation_backend: allocationBackend(),
-    legacy_strategy: legacyStrategy(),
-    legacy_scenario: legacyScenario(),
-    legacy_iterations: legacyIterations(),
-    legacy_particles: legacyParticles(),
+async function runAdminQueuedTasks() {
+  const result = await callApi("/system/admin/run-submitted", {
+    adaptation_method: "similarity",
+    allocation_algorithm: byId("adminRunAlgorithm").value,
   });
-
-  state.allocationOutput = result;
-  setStatus(
-    "resourceSummary",
-    `剩余带宽 ${result.remaining_resources.bandwidth}，剩余功率 ${result.remaining_resources.power}，剩余计算 ${result.remaining_resources.compute}，剩余能耗预算 ${result.remaining_resources.energy}`
+  state.adminResult = result;
+  renderAdminTaskPanels(result);
+  const used = (result.allocation_output && result.allocation_output.used_resources) || {};
+  const total = (result.network_output && result.network_output.network) || {};
+  setText(
+    "adminRunStatus",
+    `运行完成：处理任务 ${result.business_output.users.length} 个；带宽 ${Number(used.bandwidth || 0).toFixed(3)}/${Number(total.total_bandwidth || 0).toFixed(3)}，功率 ${Number(used.power || 0).toFixed(3)}/${Number(total.total_power || 0).toFixed(3)}`
   );
-  renderResourceBreakdown(result);
-  renderTable("allocationTable", result.allocations);
-  renderRemainingPie(result);
-  setGlobalStatus("\u8d44\u6e90\u5206\u914d\u5b8c\u6210", "ok");
-  activatePanel("panel-resource");
-  logOutput("资源分配输出", result);
+  await refreshAdminUnifiedCompare();
+  await pullAdminRealtimeTasks();
 }
 
-async function runPerformance() {
-  if (!state.allocationOutput) {
-    await runAllocation();
+async function refreshAdminUnifiedCompare() {
+  try {
+    const result = await callApi("/system/admin/compare-strategies-current", {
+      adaptation_method: "similarity",
+    });
+    renderUnifiedCompareChart(result.comparisons || []);
+    setText("adminUnifiedCompareStatus", `已更新：任务 ${result.task_count || 0} 个`);
+  } catch (error) {
+    setText("adminUnifiedCompareStatus", error.message);
   }
+}
 
-  const network = state.networkOutput
-    ? {
-        cpu_capacity: state.networkOutput.network.cpu_capacity,
-        compute_energy_threshold: state.networkOutput.network.compute_energy_threshold,
-        total_bandwidth: state.networkOutput.network.total_bandwidth,
-        total_power: state.networkOutput.network.total_power,
-        channel_scenario: state.networkOutput.network.channel_scenario,
+function buildAdminRealtimeDigest(run) {
+  const metrics = (run && run.performance_output && run.performance_output.user_metrics) || [];
+  return JSON.stringify(metrics.map((m) => [m.user_id, m.delay_ms, m.fidelity, m.snr_db]));
+}
+
+function buildAdminBoardDigest(rows) {
+  return JSON.stringify((rows || []).map((r) => [r.tenant_id, r.user_id, r.updated_at, r.status]));
+}
+
+function renderAdminBoardRows(rows) {
+  const sorted = (rows || []).slice().sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
+
+  renderTable(
+    "adminTaskTable",
+    sorted.map((row) => ({
+      tenant_id: row.tenant_id,
+      user_id: row.user_id,
+      requirement: row.requirement,
+      domain: row.domain,
+      slice: row.slice,
+      bandwidth: Number(row.bandwidth || 0).toFixed(4),
+      bw_share: `${((Number(row.bandwidth || 0) / Math.max(Number(row.total_bandwidth || 0), 1e-9)) * 100).toFixed(2)}%`,
+      power: Number(row.power || 0).toFixed(4),
+      power_share: `${((Number(row.power || 0) / Math.max(Number(row.total_power || 0), 1e-9)) * 100).toFixed(2)}%`,
+      compute: Number(row.compute || 0).toFixed(4),
+      compute_share: `${((Number(row.compute || 0) / Math.max(Number(row.total_compute || 0), 1e-9)) * 100).toFixed(2)}%`,
+      delay_ms: Number(row.delay_ms || 0).toFixed(4),
+      fidelity: Number(row.fidelity || 0).toFixed(4),
+      snr_db: Number(row.snr_db || 0).toFixed(4),
+      status: row.status || "-",
+      updated_at: row.updated_at || "-",
+    }))
+  );
+
+  renderTable(
+    "adminMetricQueue",
+    sorted.map((row) => ({
+      tenant_id: row.tenant_id,
+      user_id: row.user_id,
+      slice_id: row.slice_id || "-",
+      delay_ms: Number(row.delay_ms || 0).toFixed(4),
+      fidelity: Number(row.fidelity || 0).toFixed(4),
+      snr_db: Number(row.snr_db || 0).toFixed(4),
+      bandwidth: Number(row.bandwidth || 0).toFixed(4),
+      power: Number(row.power || 0).toFixed(4),
+      compute: Number(row.compute || 0).toFixed(4),
+      updated_at: row.updated_at || "-",
+    }))
+  );
+}
+
+function renderAdminPendingQueueRows(rows) {
+  const pending = (rows || []).slice().sort((a, b) => String(b.submitted_at || "").localeCompare(String(a.submitted_at || "")));
+  renderTable(
+    "adminMetricQueue",
+    pending.map((row) => ({
+      tenant_id: row.tenant_id || "-",
+      user_id: row.user_id || "-",
+      requirement: row.requirement_type || "-",
+      domain: row.domain_type || "-",
+      status: row.status || "待运行",
+      submitted_at: row.submitted_at || "-",
+    }))
+  );
+}
+
+async function pullAdminRealtimeTasks() {
+  if (state.role !== "admin" || !state.token) return;
+  try {
+    await refreshAuthStats();
+    const snapshot = await callApi("/state", null, "GET");
+    const board = snapshot.admin_task_board || [];
+    const pending = snapshot.pending_tasks || [];
+
+    if (board.length) {
+      const digest = buildAdminBoardDigest(board);
+      if (digest !== adminRealtimeDigest) {
+        adminRealtimeDigest = digest;
+        renderAdminBoardRows(board);
       }
-    : currentNetworkPayload();
+      if (pending.length) {
+        renderAdminPendingQueueRows(pending);
+      }
+      setText("adminRealtimeStatus", `实时同步中：累计任务 ${board.length}，待运行 ${pending.length}`);
+      return;
+    }
 
-  const result = await callApi("/module/performance/evaluate", {
-    users: state.businessOutput.users,
-    allocations: state.allocationOutput.allocations,
-    network,
+    if (pending.length) {
+      renderTable(
+        "adminTaskTable",
+        pending.map((row) => ({
+          tenant_id: row.tenant_id || "-",
+          user_id: row.user_id || "-",
+          requirement: row.requirement_type || "-",
+          domain: row.domain_type || "-",
+          status: row.status || "待运行",
+          submitted_at: row.submitted_at || "-",
+        }))
+      );
+      renderAdminPendingQueueRows(pending);
+      setText("adminRealtimeStatus", `待运行任务 ${pending.length}，等待管理员执行`);
+      return;
+    }
+
+    const run = snapshot.last_new_run;
+    if (!run || !run.business_output || !run.business_output.users || !run.business_output.users.length) {
+      setText("adminRealtimeStatus", "等待租户提交任务");
+      return;
+    }
+
+    const digest = buildAdminRealtimeDigest(run);
+    if (digest !== adminRealtimeDigest) {
+      adminRealtimeDigest = digest;
+      renderAdminTaskPanels(run);
+    }
+    setText("adminRealtimeStatus", `实时同步中：最新任务数 ${run.business_output.users.length}`);
+  } catch (_error) {
+    setText("adminRealtimeStatus", "实时同步失败");
+  }
+}
+
+function startAdminRealtimePolling() {
+  stopAdminRealtimePolling();
+  pullAdminRealtimeTasks().catch(() => {});
+  adminRealtimeTimer = setInterval(() => {
+    pullAdminRealtimeTasks().catch(() => {});
+  }, 3000);
+}
+
+function renderAdminTaskPanels(result) {
+  const adapts = (result.adaptation_output && result.adaptation_output.relations) || [];
+  const allocs = (result.allocation_output && result.allocation_output.allocations) || [];
+  const metrics = (result.performance_output && result.performance_output.user_metrics) || [];
+  const network = (result.network_output && result.network_output.network) || {};
+  const totalBandwidth = Number(network.total_bandwidth || 0);
+  const totalPower = Number(network.total_power || 0);
+  const totalCompute = Number(network.cpu_capacity || 0);
+
+  const allocMap = Object.fromEntries(allocs.map((row) => [row.user_id, row]));
+  const metricMap = Object.fromEntries(metrics.map((row) => [row.user_id, row]));
+
+  const rows = adapts.map((row) => {
+    const alloc = allocMap[row.user_id] || {};
+    const metric = metricMap[row.user_id] || {};
+    return {
+      user_id: row.user_id,
+      tenant_id: row.tenant_id,
+      requirement: row.requirement_type,
+      domain: row.domain_type,
+      slice: row.matched_slice_name,
+      bandwidth: Number(alloc.bandwidth || 0).toFixed(4),
+      bw_share: `${((Number(alloc.bandwidth || 0) / Math.max(totalBandwidth, 1e-9)) * 100).toFixed(2)}%`,
+      power: Number(alloc.power || 0).toFixed(4),
+      power_share: `${((Number(alloc.power || 0) / Math.max(totalPower, 1e-9)) * 100).toFixed(2)}%`,
+      compute: Number(alloc.compute || 0).toFixed(4),
+      compute_share: `${((Number(alloc.compute || 0) / Math.max(totalCompute, 1e-9)) * 100).toFixed(2)}%`,
+      delay_ms: Number(metric.delay_ms || 0).toFixed(4),
+      fidelity: Number(metric.fidelity || 0).toFixed(4),
+      snr_db: Number(metric.snr_db || 0).toFixed(4),
+      status: metric.pass ? "通过" : "未通过",
+    };
   });
 
-  state.performanceOutput = result;
-  renderMetrics(result.core_metrics);
-  renderBars(fidelityChart, result.charts.fidelity_by_user, "value", 1);
-  renderBars(delayChart, result.charts.delay_by_user, "value");
-  setGlobalStatus("\u6027\u80fd\u8bc4\u4f30\u5b8c\u6210", "ok");
-  activatePanel("panel-performance");
-  logOutput("性能评估输出", result);
+  renderTable("adminTaskTable", rows);
+
+  const queueRows = metrics.map((m) => ({
+    user_id: m.user_id,
+    slice_id: m.slice_id,
+    delay_ms: Number(m.delay_ms || 0).toFixed(4),
+    fidelity: Number(m.fidelity || 0).toFixed(4),
+    snr_db: Number(m.snr_db || 0).toFixed(4),
+    bandwidth: Number(m.bandwidth || 0).toFixed(4),
+    bw_share: `${((Number(m.bandwidth || 0) / Math.max(totalBandwidth, 1e-9)) * 100).toFixed(2)}%`,
+    power: Number(m.power || 0).toFixed(4),
+    power_share: `${((Number(m.power || 0) / Math.max(totalPower, 1e-9)) * 100).toFixed(2)}%`,
+    compute: Number(m.compute || 0).toFixed(4),
+    compute_share: `${((Number(m.compute || 0) / Math.max(totalCompute, 1e-9)) * 100).toFixed(2)}%`,
+  }));
+  renderTable("adminMetricQueue", queueRows);
 }
 
-async function runSystem() {
-  const payload = {
-    business: currentBusinessPayload(),
-    network: currentNetworkPayload(),
-    slicing: currentSlicePayload(),
-    adaptation_method: adaptationMethod(),
-    allocation_algorithm: allocationAlgorithm(),
-    allocation_backend: allocationBackend(),
-    legacy_strategy: legacyStrategy(),
-    legacy_scenario: legacyScenario(),
-    legacy_iterations: legacyIterations(),
-    legacy_particles: legacyParticles(),
+function renderTenantTaskTable() {
+  const rows = tenantTasks.map((task) => ({
+    task_id: task.task_id,
+    requirement: task.requirement_type,
+    domain: task.domain_type,
+    payload_symbols: task.payload_symbols,
+    distance_m: task.distance_m,
+    status: task.status,
+    slice: task.slice_name || "-",
+  }));
+  renderTable("tenantTaskTable", rows);
+}
+
+function addTenantTask() {
+  const task = {
+    task_id: `task-${tenantTaskSeq++}`,
+    requirement_type: byId("tenantReq").value,
+    domain_type: byId("tenantDomain").value,
+    payload_symbols: Number(byId("tenantPayload").value || 12),
+    distance_m: Number(byId("tenantDistance").value || 2600),
+    status: "未提交",
+    slice_name: "-",
   };
+  tenantTasks.push(task);
+  renderTenantTaskTable();
+  setText("tenantTaskStatus", `已添加任务 ${task.task_id}，当前总任务 ${tenantTasks.length}`);
+}
 
-  const endpoint = state.role === "admin" ? "/system/admin/run" : "/system/tenant/run";
-  const result = await callApi(endpoint, payload);
+function tenantSubmitBusinessPayload() {
+  const submitted = tenantTasks.filter((task) => task.status === "已提交");
+  if (!submitted.length) {
+    throw new Error("请先添加任务并提交");
+  }
 
-  state.businessOutput = result.business_output;
-  state.networkOutput = result.network_output;
-  state.slicingOutput = result.slicing_output;
-  state.adaptationOutput = result.adaptation_output;
-  state.allocationOutput = result.allocation_output;
-  state.performanceOutput = result.performance_output;
+  return {
+    user_count: submitted.length,
+    modality: "text",
+    default_requirement_type: "high_fidelity",
+    default_domain_type: "animal",
+    tenant_id: state.user.tenant_id || "tenant-1",
+    users: submitted.map((task) => ({
+      user_id: task.task_id,
+      tenant_id: state.user.tenant_id || "tenant-1",
+      modality: "text",
+      requirement_type: task.requirement_type,
+      domain_type: task.domain_type,
+      payload_symbols: task.payload_symbols,
+      distance_m: task.distance_m,
+      base_similarity: task.domain_type === "animal" ? 0.74 : task.domain_type === "music" ? 0.71 : 0.69,
+    })),
+  };
+}
 
-  renderTable("adaptTable", result.adaptation_output.relations);
-  renderTable("allocationTable", result.allocation_output.allocations);
-  renderMetrics(result.performance_output.core_metrics);
-  renderBars(fidelityChart, result.performance_output.charts.fidelity_by_user, "value", 1);
-  renderBars(delayChart, result.performance_output.charts.delay_by_user, "value");
-  renderRemainingPie(result.allocation_output);
-  renderResourceBreakdown(result.allocation_output);
+function renderTenantPanels(result) {
+  const allocs = (result.allocation_output && result.allocation_output.allocations) || [];
+  const metrics = (result.performance_output && result.performance_output.user_metrics) || [];
+  const adapts = (result.adaptation_output && result.adaptation_output.relations) || [];
 
-  setStatus("businessSummary", `业务用户数：${result.business_output.summary.user_count}`);
-  setStatus(
-    "resourceSummary",
-    `剩余带宽 ${result.allocation_output.remaining_resources.bandwidth}，剩余功率 ${result.allocation_output.remaining_resources.power}，剩余计算 ${result.allocation_output.remaining_resources.compute}，剩余能耗预算 ${result.allocation_output.remaining_resources.energy}`
+  const sliceMap = Object.fromEntries(adapts.map((row) => [row.user_id, row.matched_slice_name]));
+  tenantTasks.forEach((task) => {
+    if (sliceMap[task.task_id]) task.slice_name = sliceMap[task.task_id];
+  });
+  renderTenantTaskTable();
+
+  renderTable(
+    "tenantAllocTable",
+    allocs.map((row) => ({
+      task_id: row.user_id,
+      slice_id: row.slice_id,
+      bandwidth: Number(row.bandwidth || 0).toFixed(4),
+      power: Number(row.power || 0).toFixed(4),
+      compute: Number(row.compute || 0).toFixed(4),
+      energy_cost: Number(row.energy_cost || 0).toFixed(4),
+    }))
   );
-  setGlobalStatus("\u7cfb\u7edf\u8fd0\u884c\u5b8c\u6210", "ok");
-  activatePanel("panel-performance");
 
-  logOutput("系统一键运行输出", result);
+  renderBars(
+    "tenantDelayBars",
+    metrics.map((m) => ({ label: m.user_id, value: Number(m.delay_ms || 0) })),
+    "value"
+  );
+  renderBars(
+    "tenantFidelityBars",
+    metrics.map((m) => ({ label: m.user_id, value: Number(m.fidelity || 0) })),
+    "value",
+    1
+  );
+}
+
+async function submitTenantTasks() {
+  if (!tenantTasks.length) {
+    throw new Error("请先添加任务");
+  }
+  tenantTasks.forEach((task) => {
+    if (task.status === "未提交") task.status = "已提交";
+  });
+
+  const result = await callApi("/system/tenant/submit", tenantSubmitBusinessPayload());
+  setText("tenantTaskStatus", `提交成功：本次 ${result.submitted_count || 0} 个，待运行总数 ${result.pending_total || 0}`);
 }
 
 function bindEvents() {
-  document.getElementById("loginBtn").addEventListener("click", () => login().catch((e) => alert(e.message)));
-  document.getElementById("logoutBtn").addEventListener("click", () => logout().catch((e) => alert(e.message)));
-  document.getElementById("loadExampleBtn").addEventListener("click", () => loadExample().catch((e) => alert(e.message)));
+  byId("loginBtn").addEventListener("click", () => login().catch((e) => setText("loginStatus", e.message)));
+  byId("logoutBtn").addEventListener("click", () => logout().catch(() => resetToLogin()));
 
-  document.getElementById("buildBusinessBtn").addEventListener("click", () => runBusinessConfig().catch((e) => alert(e.message)));
-  document.getElementById("buildNetworkBtn").addEventListener("click", () => runNetworkConfig().catch((e) => alert(e.message)));
-  document.getElementById("buildSliceBtn").addEventListener("click", () => runSliceConfig().catch((e) => alert(e.message)));
-  document.getElementById("runAdaptBtn").addEventListener("click", () => runAdaptation().catch((e) => alert(e.message)));
-  document.getElementById("runAllocateBtn").addEventListener("click", () => runAllocation().catch((e) => alert(e.message)));
-  document.getElementById("runPerformanceBtn").addEventListener("click", () => runPerformance().catch((e) => alert(e.message)));
-  document.getElementById("runSystemBtn").addEventListener("click", () => runSystem().catch((e) => alert(e.message)));
-  const quickRunBtn = document.getElementById("quickRunBtn");
-  if (quickRunBtn) {
-    quickRunBtn.addEventListener("click", () => runSystem().catch((e) => alert(e.message)));
-  }
-
-  const runLegacyCompareBtn = document.getElementById("runLegacyCompareBtn");
-  if (runLegacyCompareBtn) {
-    runLegacyCompareBtn.addEventListener("click", () => runLegacyCompare().catch((e) => alert(e.message)));
-  }
-  document.getElementById("systemType").addEventListener("change", (event) => {
+  byId("systemType").addEventListener("change", (event) => {
     if (event.target.value === "admin") {
-      document.getElementById("username").value = "admin";
-      document.getElementById("password").value = "admin123";
+      byId("username").value = "admin";
+      byId("password").value = "admin123";
     } else {
-      document.getElementById("username").value = "tenant1";
-      document.getElementById("password").value = "tenant123";
+      byId("username").value = "tenant1";
+      byId("password").value = "tenant123";
     }
   });
+
+  byId("adminPublishBtn").addEventListener("click", () => publishAdminConfig().catch((e) => setText("adminConfigStatus", e.message)));
+  byId("adminRunQueuedBtn").addEventListener("click", () => runAdminQueuedTasks().catch((e) => setText("adminRunStatus", e.message)));
+  byId("addTaskBtn").addEventListener("click", () => {
+    try {
+      addTenantTask();
+    } catch (error) {
+      setText("tenantTaskStatus", error.message);
+    }
+  });
+  byId("submitTaskBtn").addEventListener("click", () => submitTenantTasks().catch((e) => setText("tenantTaskStatus", e.message)));
 }
 
-bindNavigation();
 bindEvents();
-renderRoleView();
-setGlobalStatus("系统待配置", "idle");
-loadExample().catch(() => {
-  logOutput("提示", { message: "可手动输入配置后执行" });
-});
-
-
-
-
-
-
-
-
+resetToLogin();

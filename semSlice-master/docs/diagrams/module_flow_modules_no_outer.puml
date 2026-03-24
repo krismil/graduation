@@ -1,0 +1,65 @@
+@startuml
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName Microsoft YaHei
+skinparam shadowing false
+skinparam ArrowColor #444444
+skinparam ArrowThickness 1
+skinparam activity {
+  BackgroundColor #F3F3F3
+  BorderColor #4A4A4A
+  FontColor #222222
+  DiamondBackgroundColor #FAFAFA
+  DiamondBorderColor #4A4A4A
+  StartColor #FFFFFF
+  EndColor #FFFFFF
+}
+
+start
+
+partition "认\n证\n与\n权\n限\n模\n块" {
+  :用户登录（管理员/租户）;
+  :令牌校验与角色鉴别;
+}
+
+if (认证通过？) then (是)
+else (否)
+  :返回未授权信息;
+  stop
+endif
+
+partition "业\n务\n配\n置\n模\n块" {
+  :配置用户数量、业务需求类型、业务领域类型、租户标识;
+  :导入用户清单或自动生成用户集合;
+}
+
+partition "网\n络\n配\n置\n模\n块" {
+  :配置计算能力、总带宽、总功率、能耗阈值、信道场景;
+}
+
+partition "切\n片\n构\n建\n与\n分\n发\n模\n块" {
+  :配置切片数量、切片命名、编解码器数量、知识库集合;
+  :生成切片实例并建立切片与知识库绑定;
+}
+
+partition "切\n片\n与\n业\n务\n适\n配\n模\n块" {
+  :按“相似度”或“领域优先”进行适配;
+  :知识不匹配时降权，必要时执行兜底分配;
+}
+
+partition "资\n源\n管\n理\n与\n编\n排\n模\n块" {
+  :执行在线优化分配、规则分配或复现实验后端分配;
+  :输出分配结果、已用资源、剩余资源、分配时间线;
+}
+
+partition "性\n能\n评\n估\n与\n可\n视\n化\n模\n块" {
+  :计算平均保真度、平均时延、通过率、平均能耗;
+  :前端展示指标卡、柱状图、表格和剩余资源图;
+}
+
+partition "实\n验\n复\n现\n与\n策\n略\n对\n比\n模\n块" {
+  :按需调用复现实验后端;
+  :输出三策略对比结果与任务级结果点集;
+}
+
+stop
+@enduml

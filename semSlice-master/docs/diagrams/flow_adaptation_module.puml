@@ -1,0 +1,32 @@
+@startuml
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName Microsoft YaHei
+skinparam shadowing false
+skinparam ArrowColor #444444
+skinparam ArrowThickness 1
+skinparam activity {
+  BackgroundColor #F3F3F3
+  BorderColor #4A4A4A
+  FontColor #222222
+  DiamondBackgroundColor #FAFAFA
+  DiamondBorderColor #4A4A4A
+}
+
+title 切片与业务适配模块流程图（简化）
+
+start
+
+:输入用户集合与切片集合;
+
+if (适配方式?) then (知识度匹配)
+  :综合领域匹配、知识水平、需求偏置评分;
+  :选择得分最高切片;
+else (领域匹配)
+  :按领域类型优先匹配切片;
+endif
+
+:生成结构化关系表;\n用户/切片/编解码器/知识库/相似度分数;
+:输出到资源管理与编排模块;
+
+stop
+@enduml

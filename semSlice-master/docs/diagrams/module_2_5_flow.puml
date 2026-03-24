@@ -1,0 +1,67 @@
+@startuml
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName Microsoft YaHei
+skinparam shadowing false
+skinparam ArrowColor #444444
+skinparam ArrowThickness 1
+skinparam activity {
+  BackgroundColor #F3F3F3
+  BorderColor #4A4A4A
+  FontColor #222222
+  DiamondBackgroundColor #FAFAFA
+  DiamondBorderColor #4A4A4A
+  StartColor #FFFFFF
+  EndColor #FFFFFF
+}
+
+start
+
+partition "2) 语义通信处理模块" {
+  :业务配置构建;
+  if (用户列表是否完整?) then (否)
+    :按默认规则自动补全用户画像;
+  else (是)
+    :使用用户显式传入列表;
+  endif
+
+  :网络配置映射;\n将场景映射为噪声与距离因子等可计算参数;
+  :语义指标估计;\n按语义优先级选择编码等级并估计\n信噪比/传输时延/语义保真度;
+  :输出结构化语义处理结果;
+}
+
+partition "3) 切片构建与分发模块" {
+  :切片实例化;\n生成可部署、可识别的切片服务;
+  :资源语义绑定;\n通过知识库类型与知识水平注入领域能力;
+  :分发策略支持;\n输出服务到切片的分配映射;
+}
+
+partition "4) 切片与业务适配模块" {
+  if (适配方式) then (知识度匹配)
+    :综合领域匹配、知识水平与需求偏置评分;\n选择得分最高切片;
+  else (领域匹配)
+    :按领域类型优先匹配;\n用于快速、可解释映射;
+  endif
+  :输出结构化关系表;\n用户/切片/编解码器/知识库/相似度分数;
+}
+
+partition "5) 资源管理与编排模块" {
+  if (分配路径) then (legacy实验路径)
+    :执行 legacy 实验分配;
+  else (在线/规则分配)
+    if (算法=PSO?) then (是)
+      :执行 PSO 在线分配;
+    else (否)
+      :执行规则分配策略;
+    endif
+  endif
+
+  :统一计算能耗;\nenergy_cost = 1.8 * compute + 45 * power;
+  if (超出能耗阈值?) then (是)
+    :按比例缩放计算资源;\n保证分配结果可行;
+  else (否)
+  endif
+  :返回分配结果、已用资源、剩余资源与时间线;
+}
+
+stop
+@enduml

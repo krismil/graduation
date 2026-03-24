@@ -354,45 +354,12 @@ def _summary_from_result(strategy: str, score_sum: float, score_by_slice: List[f
 
 
 def compare_legacy_strategies(scenario: str, resource_vector: List[float], compare_mode: str = "paper_sim") -> Dict:
-    mode = (compare_mode or "paper_sim").lower()
-    if mode not in ["paper_sim", "legacy", "hybrid"]:
-        mode = "paper_sim"
+    _ = compare_mode
 
     comparisons: List[dict] = []
     for strategy in ["semslice", "netslice", "random"]:
-        if mode == "paper_sim":
-            score_sum, score_by_slice, details = _simulate_legacy_details(scenario, strategy, resource_vector)
-            comparisons.append(_summary_from_result(strategy, score_sum, score_by_slice, details, None))
-            continue
-
-        try:
-            score_sum, score_by_slice, details = evaluate_legacy_vector(strategy, scenario, resource_vector)
-            comparisons.append(_summary_from_result(strategy, score_sum, score_by_slice, details, None))
-        except Exception as error:
-            if mode == "hybrid":
-                score_sum, score_by_slice, details = _simulate_legacy_details(scenario, strategy, resource_vector)
-                comparisons.append(
-                    _summary_from_result(
-                        strategy,
-                        score_sum,
-                        score_by_slice,
-                        details,
-                        "legacy failed, fallback to paper_sim: {0}".format(str(error)),
-                    )
-                )
-            else:
-                comparisons.append(
-                    {
-                        "strategy": strategy,
-                        "score_sum": None,
-                        "score_by_slice": [],
-                        "avg_delay_ms": None,
-                        "avg_ss": None,
-                        "avg_s_se": None,
-                        "points": [],
-                        "error": str(error),
-                    }
-                )
+        score_sum, score_by_slice, details = _simulate_legacy_details(scenario, strategy, resource_vector)
+        comparisons.append(_summary_from_result(strategy, score_sum, score_by_slice, details, None))
 
     success = any(item.get("error") is None for item in comparisons)
     return {

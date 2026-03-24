@@ -1,75 +1,29 @@
 @startuml
-skinparam backgroundColor #071622
+skinparam backgroundColor #FFFFFF
 skinparam defaultFontName Microsoft YaHei
-skinparam shadowing true
-skinparam roundcorner 12
-skinparam ArrowColor #9CC8FF
-skinparam ArrowThickness 1.2
+skinparam shadowing false
+skinparam roundcorner 6
+skinparam ArrowColor #444444
+skinparam ArrowThickness 1
 skinparam rectangle {
-  FontColor #EAF4FF
-  BorderColor #9CC8FF
+  BorderColor #4A4A4A
+  FontColor #222222
+  BackgroundColor #EEEEEE
 }
 
-left to right direction
+top to bottom direction
 
-rectangle "L0: 多租户角色层 (RBAC)" as L0 #26384A {
-  rectangle "运营商管理员 (Admin)\n全局网络/切片配置" as ADMIN #2F455A
-  rectangle "垂直行业租户 (Tenant)\n业务意图下发与结果查看" as TENANT #2F455A
+rectangle "系统架构（语义切片资源管理平台）" as SYS #E8E8E8 {
+  rectangle "L0 角色与权限层\n管理员入口（Admin） | 租户入口（Tenant）" as B1
+
+  rectangle "L1 交互与可视化层\n控制台界面 | 配置管理 | 可视化组件 | 数据反馈展示 | 策略对比" as B2
+
+  rectangle "L2 网关与流程编排层\nRESTful API 网关（FastAPI）\n认证与权限管理 | 租户隔离过滤 | 系统级流程编排（admin/tenant run）" as B3
+
+  rectangle "L3 服务算法与数据支撑层\n语义通信处理 | 切片构建与分发 | 切片与业务适配 | 资源管理与编排 | 性能评估\nLegacy仿真实验适配 | 运行状态缓存 | 结果数据存储" as B4
 }
 
-rectangle "L1: UI 交互与可视化层 (Frontend)" as L1 #174336 {
-  rectangle "控制台入口\nfrontend/index.html + app.js" as UI #215846
-  rectangle "业务/网络/切片配置面板" as PANEL_CFG #215846
-  rectangle "资源、时延、保真度图表面板" as PANEL_VIEW #215846
-  rectangle "三策略对比面板\nSemSlice / NetSlice / Random" as PANEL_CMP #215846
-}
-
-rectangle "L2: API 网关与鉴权编排层 (FastAPI)" as L2 #5A3E16 {
-  rectangle "REST API 网关\nbackend/app/api/routes.py" as ROUTES #6B4B1C
-  rectangle "认证与权限模块\nauth_service.py" as AUTH #6B4B1C
-  rectangle "租户隔离过滤器\ntenant scope" as FILTER #6B4B1C
-  rectangle "模块化工作流编排\n/system/admin/run /tenant/run" as WORKFLOW #6B4B1C
-}
-
-rectangle "L3: 语义切片与资源算法层 (Services)" as L3 #342A63 {
-  rectangle "语义通信处理\nsemantic_service.py\nSNR/时延/语义保真估计" as SEM #42357C
-  rectangle "切片构建与分发\nslicing_service.py" as SLC #42357C
-  rectangle "切片与业务适配\nadaptation_service.py" as ADP #42357C
-  rectangle "资源编排引擎\norchestration_service.py\nonline_pso / legacy_experiment / weighted" as ORC #42357C
-  rectangle "性能评估模块\nevaluation_service.py\nDelay/SS/S-SE/Energy" as EVA #42357C
-}
-
-rectangle "L4: Legacy 仿真实验与状态层" as L4 #5A2525 {
-  rectangle "legacy_adapter.py\nmain_compute 适配与三策略对比" as LEGACY #6E2E2E
-  rectangle "DeepSC-master 脚本集\nsem_slice_*.py / pso_*.py" as DEEPSC #6E2E2E
-  rectangle "运行状态存储\nstore/state.py" as STATE #24414A
-}
-
-ADMIN ..> UI : 配置下发
-TENANT ..> UI : 业务意图
-
-UI --> PANEL_CFG
-UI --> PANEL_VIEW
-UI --> PANEL_CMP
-UI --> ROUTES : JSON请求
-
-ROUTES --> AUTH
-AUTH --> FILTER
-FILTER --> WORKFLOW
-
-WORKFLOW --> SEM
-WORKFLOW --> SLC
-WORKFLOW --> ADP
-WORKFLOW --> ORC
-WORKFLOW --> EVA
-
-ORC --> LEGACY : 实验后端调用
-LEGACY --> DEEPSC
-WORKFLOW --> STATE
-
-SEM --> EVA : 结构化结果
-SLC --> ADP : 切片配置
-ADP --> ORC : 用户-切片关系
-ORC --> EVA : 功率/带宽/计算矩阵
-EVA --> UI : QoS/时延/保真反馈
+B1 --> B2
+B2 --> B3
+B3 --> B4
 @enduml

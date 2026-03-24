@@ -1,0 +1,32 @@
+@startuml
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName Microsoft YaHei
+skinparam shadowing false
+skinparam ArrowColor #444444
+skinparam ArrowThickness 1
+skinparam activity {
+  BackgroundColor #F3F3F3
+  BorderColor #4A4A4A
+  FontColor #222222
+  DiamondBackgroundColor #FAFAFA
+  DiamondBorderColor #4A4A4A
+}
+
+title 切片构建与分发模块流程图（简化）
+
+start
+
+:读取切片配置\n(切片数量、命名、编解码器、知识库);
+:切片实例化;\n生成可部署切片服务;
+:资源语义绑定;\n按知识库类型与知识水平绑定切片;
+
+if (分发策略) then (语义导向)
+  :按语义优先级分发;
+else (规则导向)
+  :按规则分发;
+endif
+
+:输出分配映射关系;\n明确服务归属切片;
+
+stop
+@enduml

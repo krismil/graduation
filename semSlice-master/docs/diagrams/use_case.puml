@@ -1,21 +1,47 @@
 @startuml
 left to right direction
+
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName Microsoft YaHei
+skinparam shadowing false
+skinparam roundcorner 8
 skinparam packageStyle rectangle
+skinparam ArrowColor #4A4A4A
+skinparam ArrowThickness 1
 
-actor 管理员 as Admin
-actor 租户 as Tenant
+skinparam actor {
+  BorderColor #2F5D8A
+  FontColor #1F2D3D
+}
 
-rectangle "语义通信切片系统" {
-  usecase "登录/登出" as UC_Login
-  usecase "业务配置" as UC_Business
-  usecase "网络配置(管理员)" as UC_Network
-  usecase "切片配置(管理员)" as UC_Slice
-  usecase "业务-切片适配" as UC_Adapt
-  usecase "资源分配" as UC_Alloc
-  usecase "性能评估" as UC_Eval
-  usecase "一键运行全流程" as UC_Run
-  usecase "三策略性能对比" as UC_Compare
-  usecase "调用legacy实验后端" as UC_Legacy
+skinparam usecase {
+  BorderColor #4A5D73
+  BackgroundColor #EEF3F8
+  FontColor #1F2D3D
+}
+
+actor "管理员" as Admin
+actor "租户" as Tenant
+
+rectangle "语义通信切片系统" as SYS #F5F5F5 {
+  package "接入与配置" as P1 #F8FBFF {
+    usecase "登录/登出" as UC_Login
+    usecase "业务配置" as UC_Business
+    usecase "网络配置\n（管理员）" as UC_Network
+    usecase "切片配置\n（管理员）" as UC_Slice
+  }
+
+  package "执行与评估" as P2 #F8FBFF {
+    usecase "业务-切片适配" as UC_Adapt
+    usecase "资源分配" as UC_Alloc
+    usecase "性能评估" as UC_Eval
+    usecase "一键运行全流程" as UC_Run
+  }
+
+  package "对比与复现" as P3 #F8FBFF {
+    usecase "三策略性能对比" as UC_Compare
+    usecase "调用 legacy 实验后端" as UC_Legacy
+  }
 }
 
 Admin --> UC_Login
@@ -41,6 +67,10 @@ Tenant --> UC_Run
 
 Admin --> UC_Compare
 Tenant --> UC_Compare
+
+UC_Run .> UC_Adapt : <<include>>
+UC_Run .> UC_Alloc : <<include>>
+UC_Run .> UC_Eval : <<include>>
 
 UC_Alloc .> UC_Legacy : <<extend>>
 UC_Compare .> UC_Legacy : <<include>>

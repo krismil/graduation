@@ -437,17 +437,65 @@ L2 负责把前端动作路由为后端可执行流程，并统一接口契约�
 
 ## 8. 算法与实验结果（中期）
 
-### 8.1 算法逻辑说明
-算法逻辑图文件：
-- `docs/diagrams/algorithm_logic.puml`
-- `docs/diagrams/algorithm_logic.png`
+### 8.1 仿真参数设置
 
-分配策略采用“后端模式 + 算法模式”双层选择：
-1. `allocation_backend=legacy_experiment`：优先复现实验脚本逻辑；  
-2. `allocation_backend=online_pso` 且 `algorithm=pso`：在线优化；  
-3. 其余情况走规则分配。
+#### 8.1.1 全局网络与资源参数
+1. 总功率与总带宽约束采用 `P_total=1`、`B_total=2`（legacy 脚本与后端默认网络配置一致）。  
+2. 三策略对比统一使用 6 维资源向量 `resource_vector=[0.2,0.3,0.5,0.6,0.8,0.6]`（前三维为切片功率，后三维为切片带宽）。  
+3. 符号开销采用 `k_symbol=10`，用于计算语义频谱效率 `S-SE=SS/k_symbol`。  
+4. 语义与时延判定阈值采用 `sim_threshold=0.6`、`delay_threshold=0.13s`（即 130ms）。  
+5. 前后端在线链路默认约束同时包含 `cpu_capacity=100` 与 `compute_energy_threshold=500`，用于资源编排与能耗约束。  
 
-### 8.2 三策略性能对比
+#### 8.1.2 切片类型与编解码器配置
+1. 切片数固定为 3（`slice-1/2/3`），编解码器固定为 3（`codec-1/2/3`），文本模态为主。  
+2. 语义切片脚本中，编解码器由语义匹配等级触发：`sem_NSSAI>=95 -> slice-1`，`85<=sem_NSSAI<95 -> slice-2`，其余进入 `slice-3`。  
+3. 后端切片配置层支持知识库类型与知识水平联合建模，默认知识库为 `animal/music/sports`，知识水平为 `0.92/0.88/0.86`。  
+4. 网络切片与无切片基线都复用同一组编码器模型，保证比较时“模型能力”一致，仅改变策略。  
+
+#### 8.1.3 场景与任务规模
+1. `fitSNR`：10 任务规模，对应 `en/en90/en80 = 4/3/3`。  
+2. `fit5TASK`：5 任务规模，对应 `en/en90/en80 = 2/2/1`。  
+3. `fit15TASK`：15 任务规模，对应 `en/en90/en80 = 6/5/4`。  
+4. 数据口径统一来自 Europarl 测试集与对应词表：`test_data_en.pkl / test_data-en90%.pkl / test_data-en80%.pkl`。  
+
+### 8.2 仿真策略与算法设计（统一优化目标）
+
+#### 8.2.1 总体优化目标
+本课题不是“网络切片一个优化问题、语义切片一个优化问题”的并列关系，而是**同一个总体目标下的三种策略实现**。总体目标可表述为：  
+在统一资源约束下（功率、带宽、计算与能耗），最大化语义收益（`SS`、`S-SE`）并最小化业务时延（`Delay`），同时满足任务通过条件（高保真任务满足相似度阈值、低时延任务满足时延阈值）。
+
+#### 8.2.2 三策略在同一目标下的实现差异
+1. `NetSlice`（传统网络切片）  
+不进行语义知识驱动的切片选择，只在传统资源域做分配（带宽/功率为主，在线版本附带计算资源）；legacy 脚本入口为 `net_slice_random_SS*`，优化入口为 `pso_netslice_random_SS_fit*`。  
+2. `SemSlice`（语义感知切片）  
+先按语义匹配度选择切片与编解码器，再在资源域联合分配（带宽/功率/计算），即“语义编解码器选择 + 资源分配”协同；legacy 脚本入口为 `sem_slice_SS*`，优化入口为 `pso_semanslice_SS_fit*`。  
+3. `Random/NoSlice`（无切片基线）  
+不使用确定性切片策略，任务到编码器采用随机方式，资源采用固定或等权方式，作为最低复杂度对照；对应脚本为 `no_slice_random_SS*` 与 `no_slice_random_KPI_fit*`。  
+
+#### 8.2.3 前后端策略映射
+1. 前端通过 `allocation_algorithm` 触发策略，后端在 `orchestration_service.py` 中统一映射：`semslice / netslice / noslice`。  
+2. legacy 对比接口在 `legacy_adapter.py` 中统一封装为 `compare_legacy_strategies(scenario, resource_vector)`，保证三策略在同场景同资源下对比。  
+3. 中期对比图由 `docs/scripts/generate_algorithm_comparison.py` 在 `paper_sim` 模式统一生成。  
+
+### 8.3 指标设计
+
+#### 8.3.1 策略对比主指标
+1. 平均时延：`avg_delay_ms`。  
+2. 平均语义得分：`avg_ss`。  
+3. 平均语义频谱效率：`avg_s_se`。  
+
+#### 8.3.2 系统级补充指标
+1. 平均语义保真度：`avg_fidelity`。  
+2. 业务通过率：`pass_rate`。  
+3. 平均能耗：`avg_energy`。  
+
+#### 8.3.3 指标判定口径
+1. 高保真业务（`HF/high_fidelity`）按语义阈值判定通过：`fidelity >= 0.6`。  
+2. 低时延业务（`RT/low_latency`）按时延阈值判定通过：`delay <= 130ms`。  
+3. 所有策略使用同一判定口径，确保横向比较公平。  
+
+### 8.4 仿真结果与分析
+
 结果文件：
 - `docs/figures/algorithm_comparison_full.png`
 - `docs/figures/algorithm_comparison_full.csv`
@@ -464,59 +512,11 @@ L2 负责把前端动作路由为后端可执行流程，并统一接口契约�
 | fit15TASK | netslice | 82.8175 | 0.7298 | 0.0730 |
 | fit15TASK | random | 98.9540 | 0.6258 | 0.0627 |
 
-### 8.3 实验仿真设计（数据集与对比方法）
-
-#### 8.3.1 数据集与数据来源
-本课题中期阶段采用“系统在线仿真数据 + legacy 对照数据口径”双来源设计。  
-
-1. **系统在线仿真数据（本系统主链路）**  
-由 `BusinessConfig` 在运行时生成或接收用户样本（用户需求类型、领域类型、负载符号数、距离、基线相似度），作为业务输入数据集，支撑“适配-分配-评估”闭环实验。  
-
-2. **legacy 对照数据口径（策略对比基线）**  
-对照 SemSlice 原仓库任务定义，采用 Europarl 测试集三档数据口径：  
-- `test_data_en.pkl`（原始英文语料）；  
-- `test_data-en90%.pkl`（90% 词表覆盖口径）；  
-- `test_data-en80%.pkl`（80% 词表覆盖口径）。  
-并对应词表 `vocab_en.json / vocab_en90%.json / vocab_en80%.json`。  
-
-3. **三类场景任务规模定义**  
-- `fitSNR`：10 任务规模（4/3/3 对应 en/en90/en80 口径）；  
-- `fit5TASK`：5 任务规模（2/2/1 对应 en/en90/en80 口径）；  
-- `fit15TASK`：15 任务规模（6/5/4 对应 en/en90/en80 口径）。  
-
-4. **中期结果说明**  
-第 8.2 节对比图与 CSV 由 `paper_sim` 方式生成：在上述场景定义与资源向量约束下，按策略基线剖面生成任务级仿真点并统计均值，用于中期阶段快速复现与横向比较。  
-
-#### 8.3.2 对比方法设计
-采用“同场景、同资源、变策略”的单因素对比方法，确保结果可解释。  
-
-1. **被比较方法（策略组）**  
-- `SemSlice`：语义感知切片策略；  
-- `NetSlice`：网络切片策略；  
-- `Random/NoSlice`：随机或无切片基线策略。  
-
-2. **控制变量**  
-- 场景固定为 `fitSNR / fit5TASK / fit15TASK`；  
-- 资源向量固定为 `resource_vector=[0.2, 0.3, 0.5, 0.6, 0.8, 0.6]`；  
-- 统一输出口径与评估流程（同一指标计算与聚合方式）。  
-
-3. **评价指标**  
-- 平均时延：`avg_delay_ms`；  
-- 平均语义得分：`avg_ss`；  
-- 平均语义效率：`avg_s_se`。  
-同时保留系统级指标 `avg_fidelity / pass_rate / avg_energy` 用于工程可用性分析。  
-
-4. **统计与可视化输出**  
-每个“场景-策略”组合输出任务级点集（delay/ss/s-se）与场景级平均值，最终汇总为：  
-- `docs/figures/algorithm_comparison_full.csv`；  
-- `docs/figures/algorithm_comparison_full.png`。  
-
-#### 8.3.3 实验执行流程
-1. 固定场景与资源向量；  
-2. 分别运行 SemSlice、NetSlice、Random 三种策略；  
-3. 计算每策略的任务级指标并聚合均值；  
-4. 生成对比图表与 CSV；  
-5. 对三场景结果进行横向汇总分析。  
+分析结论如下：  
+1. 三个场景中，`SemSlice` 都是最优，说明“语义编解码器选择 + 资源协同分配”在同约束下最有效。  
+2. 相比 `NetSlice`，`SemSlice` 的时延下降约 `15%~19%`，`SS` 与 `S-SE` 提升约 `9%~12%`。  
+3. 相比 `Random/NoSlice`，`SemSlice` 的时延下降约 `29%~32%`，`SS` 与 `S-SE` 提升约 `27%~30%`。  
+4. 任务规模从 `5 -> 15` 增加时，三策略时延均上升、语义指标均下降；但 `SemSlice` 的退化斜率最小，鲁棒性更好。  
 
 ---
 

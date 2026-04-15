@@ -44,3 +44,22 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - `POST /api/v1/module/performance/evaluate`
 - `POST /api/v1/system/admin/run`（管理员）
 - `POST /api/v1/system/tenant/run`
+
+## MySQL Database Design (Added)
+
+The MySQL schema and design docs are provided in:
+
+- `../docs/database/mysql_schema.sql`
+- `../docs/database/mysql_database_design.md`
+
+Initialize database:
+
+```bash
+mysql -u root -p < ../docs/database/mysql_schema.sql
+```
+
+Notes:
+
+- The schema covers auth/session, admin config, tenant submission, workflow run history, adaptation/allocation/performance outputs.
+- Seed accounts are inserted with `plaintext` password mode for compatibility with current in-memory logic.
+- Before production, migrate passwords to `bcrypt` and disable plaintext mode.

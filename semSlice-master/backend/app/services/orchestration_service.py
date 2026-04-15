@@ -1,5 +1,5 @@
 ﻿from collections import defaultdict
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -16,7 +16,7 @@ from app.models.schemas import (
     UserBusinessItem,
     UserResourceAllocation,
 )
-from app.services.semantic_service import CHANNEL_SCENARIOS, semantic_metrics_for_user
+from app.services.semantic_service import CHANNEL_SCENARIOS, DEFAULT_CHANNEL_SCENARIO, compute_snr_db, semantic_metrics_for_user
 
 
 def _slice_weight(task_types: List[str], avg_semantic_nssai: float, congestion_level: float) -> float:
@@ -105,14 +105,19 @@ def orchestrate_resources(
         used_compute += compute
 
     if allocations:
-        scale_power = network_state.total_power / used_power
-        scale_bandwidth = network_state.total_bandwidth / used_bandwidth
-        scale_compute = network_state.total_compute / used_compute
-
-        for item in allocations:
-            item.power = round(item.power * scale_power, 5)
-            item.bandwidth = round(item.bandwidth * scale_bandwidth, 5)
-            item.compute = round(item.compute * scale_compute, 5)
+        # Only scale down when exceeding hard limits; keep residual resources otherwise.
+        if used_power > network_state.total_power and used_power > 0:
+            scale_power = network_state.total_power / used_power
+            for item in allocations:
+                item.power = round(item.power * scale_power, 5)
+        if used_bandwidth > network_state.total_bandwidth and used_bandwidth > 0:
+            scale_bandwidth = network_state.total_bandwidth / used_bandwidth
+            for item in allocations:
+                item.bandwidth = round(item.bandwidth * scale_bandwidth, 5)
+        if used_compute > network_state.total_compute and used_compute > 0:
+            scale_compute = network_state.total_compute / used_compute
+            for item in allocations:
+                item.compute = round(item.compute * scale_compute, 5)
 
     remaining = {
         "power": round(network_state.total_power - sum(item.power for item in allocations), 6),
@@ -140,6 +145,236 @@ def _base_weight(user: UserBusinessItem, similarity_score: float, algorithm: str
 
 def _energy_cost(compute: float, power: float) -> float:
     return 1.8 * compute + 45.0 * power
+
+
+def _canonical_strategy(raw: str) -> str:
+    value = str(raw or "semslice").strip().lower()
+    alias = {
+        "pso": "semslice",
+        "semantic": "semslice",
+        "semantic_slice": "semslice",
+        "weighted": "netslice",
+        "latency_first": "netslice",
+        "equal": "noslice",
+        "random": "noslice",
+        "no_slice": "noslice",
+    }
+    normalized = alias.get(value, value)
+    if normalized not in {"semslice", "netslice", "noslice"}:
+        return "semslice"
+    return normalized
+
+
+def _snr_trend_factor(snr_db: float, strategy: str) -> float:
+    """
+    Delay trend factor used for resource shaping.
+    Piecewise trend:
+    - -6~3 dB: fast decrease
+    - 3~12 dB: slow decrease (near ceiling region)
+    """
+    snr_clamped = max(-6.0, min(12.0, float(snr_db)))
+    key = _canonical_strategy(strategy)
+
+    if key == "semslice":
+        low_start, low_end, high_end = 1.66, 1.02, 0.88
+    elif key == "netslice":
+        low_start, low_end, high_end = 1.34, 0.98, 0.89
+    else:
+        low_start, low_end, high_end = 1.08, 0.95, 0.90
+
+    if snr_clamped <= 3.0:
+        factor = low_start + ((snr_clamped + 6.0) / 9.0) * (low_end - low_start)
+    else:
+        factor = low_end + ((snr_clamped - 3.0) / 9.0) * (high_end - low_end)
+    return max(0.84, min(1.75, factor))
+
+
+def _trend_strength_by_strategy(algorithm: str) -> float:
+    key = _canonical_strategy(algorithm)
+    mapping = {
+        "semslice": 1.00,
+        "netslice": 0.72,
+        "noslice": 0.48,
+    }
+    return mapping.get(key, 0.20)
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def _apply_resource_caps(
+    allocations: List[UserResourceAllocation],
+    bandwidth_limit: float,
+    power_limit: float,
+    compute_limit: float,
+) -> None:
+    if not allocations:
+        return
+
+    bw_limit = max(1e-9, float(bandwidth_limit))
+    power_limit = max(1e-9, float(power_limit))
+    compute_limit = max(1e-9, float(compute_limit))
+
+    sum_bw = sum(max(0.0, float(item.bandwidth)) for item in allocations)
+    sum_power = sum(max(0.0, float(item.power)) for item in allocations)
+    sum_compute = sum(max(0.0, float(item.compute)) for item in allocations)
+
+    if sum_bw > bw_limit:
+        scale = bw_limit / sum_bw
+        for item in allocations:
+            item.bandwidth = max(1e-6, float(item.bandwidth) * scale)
+    if sum_power > power_limit:
+        scale = power_limit / sum_power
+        for item in allocations:
+            item.power = max(1e-6, float(item.power) * scale)
+    if sum_compute > compute_limit:
+        scale = compute_limit / sum_compute
+        for item in allocations:
+            item.compute = max(1e-6, float(item.compute) * scale)
+
+
+def _resource_budget_ratios(users: List[UserBusinessItem], algorithm: str) -> Dict[str, float]:
+    if not users:
+        return {"bandwidth": 1.0, "power": 1.0, "compute": 1.0}
+
+    count = float(len(users))
+    payload_avg = sum(max(1.0, float(user.payload_symbols)) for user in users) / count
+    distance_avg = sum(max(1.0, float(user.distance_m)) for user in users) / count
+
+    hf_ratio = sum(1.0 for user in users if user.requirement_type == "high_fidelity") / count
+    rt_ratio = sum(1.0 for user in users if user.requirement_type == "low_latency") / count
+
+    # Load is mostly driven by user count, then adjusted by payload / distance / requirement mix.
+    load_ratio = _clamp01((count - 1.0) / 11.0)
+    payload_ratio = _clamp01((payload_avg - 8.0) / 14.0)
+    distance_ratio = _clamp01((distance_avg - 1600.0) / 3600.0)
+
+    strategy_key = _canonical_strategy(algorithm)
+    strategy_bias = {
+        "semslice": 0.05,
+        "netslice": 0.03,
+        "noslice": -0.03,
+    }.get(strategy_key, 0.0)
+
+    bw_ratio = 0.42 + 0.34 * load_ratio + 0.12 * payload_ratio + 0.08 * distance_ratio + 0.04 * rt_ratio + strategy_bias
+    power_ratio = 0.38 + 0.30 * load_ratio + 0.10 * distance_ratio + 0.08 * hf_ratio + strategy_bias
+    compute_ratio = 0.40 + 0.32 * load_ratio + 0.12 * payload_ratio + 0.10 * hf_ratio + strategy_bias
+
+    return {
+        "bandwidth": max(0.30, min(0.98, bw_ratio)),
+        "power": max(0.28, min(0.95, power_ratio)),
+        "compute": max(0.30, min(0.98, compute_ratio)),
+    }
+
+
+def _apply_budget_caps(
+    allocations: List[UserResourceAllocation],
+    users: List[UserBusinessItem],
+    network: NetworkConfig,
+    algorithm: str,
+) -> None:
+    ratios = _resource_budget_ratios(users, algorithm)
+    _apply_resource_caps(
+        allocations,
+        bandwidth_limit=float(network.total_bandwidth) * ratios["bandwidth"],
+        power_limit=float(network.total_power) * ratios["power"],
+        compute_limit=float(network.cpu_capacity) * ratios["compute"],
+    )
+
+
+def _rebalance_with_snr_trend(
+    allocations: List[UserResourceAllocation],
+    users: List[UserBusinessItem],
+    network: NetworkConfig,
+    algorithm: str,
+    relations: Optional[List[AdaptationRow]] = None,
+) -> List[UserResourceAllocation]:
+    if not allocations or not users:
+        return allocations
+
+    user_map = {user.user_id: user for user in users}
+    profile = CHANNEL_SCENARIOS.get(network.channel_scenario, CHANNEL_SCENARIOS[DEFAULT_CHANNEL_SCENARIO])
+    noise_dbm = float(profile["noise_dbm"])
+    distance_factor = float(profile["distance_factor"])
+    strategy_key = _canonical_strategy(algorithm)
+    strength = _trend_strength_by_strategy(algorithm)
+    sim_map = {row.user_id: float(row.similarity_score) for row in (relations or [])}
+
+    factors: List[float] = []
+    for item in allocations:
+        user = user_map.get(item.user_id)
+        if user is None:
+            factors.append(1.0)
+            continue
+        snr_db = compute_snr_db(
+            power=max(1e-6, float(item.power)),
+            bandwidth_mhz=max(1e-6, float(item.bandwidth)),
+            distance_m=max(1.0, float(user.distance_m) * distance_factor),
+            noise_dbm=noise_dbm,
+        )
+        base_factor = _snr_trend_factor(snr_db, strategy_key)
+        delta = base_factor - 1.0
+        low_ratio = max(0.0, min(1.0, (3.0 - snr_db) / 9.0))
+        similarity = max(0.0, min(1.0, sim_map.get(item.user_id, 0.65)))
+        if strategy_key == "semslice":
+            low_boost = 1.0 + low_ratio * (0.46 + 0.36 * similarity)
+            sim_gain = 0.90 + 0.36 * similarity
+        elif strategy_key == "netslice":
+            low_boost = 1.0 + low_ratio * (0.16 + 0.16 * similarity)
+            sim_gain = 0.95 + 0.18 * similarity
+        else:
+            low_boost = 1.0 + low_ratio * (0.04 + 0.08 * similarity)
+            sim_gain = 0.98 + 0.08 * similarity
+        # Emphasize low-SNR compensation and keep high-SNR decay smooth.
+        if delta >= 0:
+            shaped = 1.0 + strength * 1.25 * delta * low_boost * sim_gain
+        else:
+            shaped = 1.0 + strength * 0.95 * delta
+        factors.append(max(0.55, min(1.65, shaped)))
+
+    for idx, item in enumerate(allocations):
+        f = factors[idx]
+        # Use asymmetric scaling so SNR (power/bandwidth) actually changes.
+        bw_gain = f
+        if strategy_key == "semslice":
+            power_gain = 1.0 + 1.45 * (f - 1.0)
+            compute_gain = 1.0 + 0.90 * (f - 1.0)
+        elif strategy_key == "netslice":
+            power_gain = 1.0 + 1.10 * (f - 1.0)
+            compute_gain = 1.0 + 0.45 * (f - 1.0)
+        else:
+            power_gain = 1.0 + 0.85 * (f - 1.0)
+            compute_gain = 1.0 + 0.25 * (f - 1.0)
+        item.bandwidth = max(1e-6, float(item.bandwidth) * bw_gain)
+        item.power = max(1e-6, float(item.power) * power_gain)
+        item.compute = max(1e-6, float(item.compute) * compute_gain)
+
+    # Keep resource usage under hard limits, but do not force fill-to-capacity.
+    _apply_resource_caps(
+        allocations,
+        bandwidth_limit=float(network.total_bandwidth),
+        power_limit=float(network.total_power),
+        compute_limit=float(network.cpu_capacity),
+    )
+    # Apply demand/load-driven budget caps so low-load scenarios keep residual resources.
+    _apply_budget_caps(allocations, users, network, strategy_key)
+
+    used_energy = 0.0
+    for item in allocations:
+        item.bandwidth = round(float(item.bandwidth), 5)
+        item.power = round(float(item.power), 5)
+        item.compute = round(float(item.compute), 5)
+        item.energy_cost = round(_energy_cost(item.compute, item.power), 5)
+        used_energy += item.energy_cost
+
+    if used_energy > network.compute_energy_threshold and used_energy > 0:
+        factor = network.compute_energy_threshold / used_energy
+        for item in allocations:
+            item.compute = round(max(1e-6, float(item.compute) * factor), 5)
+            item.energy_cost = round(_energy_cost(item.compute, item.power), 5)
+
+    return allocations
 
 
 def _build_response(allocations: List[UserResourceAllocation], network: NetworkConfig) -> ResourceAllocationResponseV2:
@@ -225,7 +460,6 @@ def _allocate_user_resources_simple(payload: ResourceAllocationRequestV2) -> Res
         allocations.append(
             UserResourceAllocation(
                 user_id=user.user_id,
-                tenant_id=user.tenant_id,
                 slice_id=rel.matched_slice_id,
                 bandwidth=round(alloc_bw, 5),
                 power=round(alloc_power, 5),
@@ -238,15 +472,18 @@ def _allocate_user_resources_simple(payload: ResourceAllocationRequestV2) -> Res
         used_power += alloc_power
         used_compute += alloc_compute
 
-    scale_bw = network.total_bandwidth / used_bw if used_bw else 1.0
-    scale_power = network.total_power / used_power if used_power else 1.0
-    scale_compute = network.cpu_capacity / used_compute if used_compute else 1.0
+    _apply_resource_caps(
+        allocations,
+        bandwidth_limit=float(network.total_bandwidth),
+        power_limit=float(network.total_power),
+        compute_limit=float(network.cpu_capacity),
+    )
 
     used_energy = 0.0
     for item in allocations:
-        item.bandwidth = round(item.bandwidth * scale_bw, 5)
-        item.power = round(item.power * scale_power, 5)
-        item.compute = round(item.compute * scale_compute, 5)
+        item.bandwidth = round(max(1e-6, float(item.bandwidth)), 5)
+        item.power = round(max(1e-6, float(item.power)), 5)
+        item.compute = round(max(1e-6, float(item.compute)), 5)
         item.energy_cost = round(_energy_cost(item.compute, item.power), 5)
         used_energy += item.energy_cost
 
@@ -256,6 +493,7 @@ def _allocate_user_resources_simple(payload: ResourceAllocationRequestV2) -> Res
             item.compute = round(item.compute * factor, 5)
             item.energy_cost = round(_energy_cost(item.compute, item.power), 5)
 
+    allocations = _rebalance_with_snr_trend(allocations, users, network, payload.algorithm, relations)
     return _build_response(allocations, network)
 
 
@@ -309,7 +547,6 @@ def _allocate_user_resources_semslice(payload: ResourceAllocationRequestV2) -> R
         allocations.append(
             UserResourceAllocation(
                 user_id=user.user_id,
-                tenant_id=user.tenant_id,
                 slice_id=rel.matched_slice_id,
                 bandwidth=round(alloc_bw, 5),
                 power=round(alloc_power, 5),
@@ -321,15 +558,18 @@ def _allocate_user_resources_semslice(payload: ResourceAllocationRequestV2) -> R
         used_power += alloc_power
         used_compute += alloc_compute
 
-    scale_bw = network.total_bandwidth / used_bw if used_bw else 1.0
-    scale_power = network.total_power / used_power if used_power else 1.0
-    scale_compute = network.cpu_capacity / used_compute if used_compute else 1.0
+    _apply_resource_caps(
+        allocations,
+        bandwidth_limit=float(network.total_bandwidth),
+        power_limit=float(network.total_power),
+        compute_limit=float(network.cpu_capacity),
+    )
 
     used_energy = 0.0
     for item in allocations:
-        item.bandwidth = round(item.bandwidth * scale_bw, 5)
-        item.power = round(item.power * scale_power, 5)
-        item.compute = round(item.compute * scale_compute, 5)
+        item.bandwidth = round(max(1e-6, float(item.bandwidth)), 5)
+        item.power = round(max(1e-6, float(item.power)), 5)
+        item.compute = round(max(1e-6, float(item.compute)), 5)
         item.energy_cost = round(_energy_cost(item.compute, item.power), 5)
         used_energy += item.energy_cost
 
@@ -339,6 +579,7 @@ def _allocate_user_resources_semslice(payload: ResourceAllocationRequestV2) -> R
             item.compute = round(item.compute * factor, 5)
             item.energy_cost = round(_energy_cost(item.compute, item.power), 5)
 
+    allocations = _rebalance_with_snr_trend(allocations, users, network, payload.algorithm, relations)
     return _build_response(allocations, network)
 
 
@@ -377,7 +618,7 @@ class _PSOAllocator(object):
         self.g_best_fitness = -1e18
         self.best_allocations = []
 
-        profile = CHANNEL_SCENARIOS.get(self.network.channel_scenario, CHANNEL_SCENARIOS["factory_indoor"])
+        profile = CHANNEL_SCENARIOS.get(self.network.channel_scenario, CHANNEL_SCENARIOS[DEFAULT_CHANNEL_SCENARIO])
         self.noise_dbm = float(profile["noise_dbm"])
         self.distance_factor = float(profile["distance_factor"])
         self.delay_ref_ms = float(profile.get("delay_ref_ms", 1.0))
@@ -419,7 +660,6 @@ class _PSOAllocator(object):
             slice_id = rel.matched_slice_id if rel is not None else "slice-1"
             item = UserResourceAllocation(
                 user_id=user.user_id,
-                tenant_id=user.tenant_id,
                 slice_id=slice_id,
                 bandwidth=round(float(bw[idx]), 5),
                 power=round(float(power[idx]), 5),
@@ -522,6 +762,13 @@ def _allocate_user_resources_pso(payload: ResourceAllocationRequestV2) -> Resour
 
     allocator = _PSOAllocator(payload)
     allocations = allocator.run()
+    allocations = _rebalance_with_snr_trend(
+        allocations,
+        payload.users,
+        payload.network,
+        payload.algorithm,
+        payload.relations,
+    )
     return _build_response(allocations, payload.network)
 
 
@@ -542,10 +789,10 @@ def _normalize_strategy_name(raw: str) -> str:
 
 def allocate_user_resources(payload: ResourceAllocationRequestV2) -> ResourceAllocationResponseV2:
     strategy = _normalize_strategy_name(payload.algorithm)
-    if strategy == "semslice":
-        return _allocate_user_resources_semslice(payload)
+    if strategy in {"semslice", "netslice"}:
+        return _allocate_user_resources_pso(payload)
 
-    simple_algorithm = "netslice" if strategy == "netslice" else "equal"
+    simple_algorithm = "equal"
     simple_payload = ResourceAllocationRequestV2(
         users=payload.users,
         relations=payload.relations,

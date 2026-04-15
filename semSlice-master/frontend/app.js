@@ -10,6 +10,21 @@ const tenantTasks = [];
 let tenantTaskSeq = 1;
 let adminRealtimeTimer = null;
 let adminRealtimeDigest = "";
+let tenantRealtimeTimer = null;
+let tenantRealtimeDigest = "";
+const TASK_STATUS_PENDING = "PENDING";
+const TASK_STATUS_SUBMITTED = "SUBMITTED";
+const TASK_STATUS_RUNNING = "RUNNING";
+const PKL_VOCAB_MAP = {
+  "test_data_en.pkl": "vocab_en.json",
+  "test_data-en90%.pkl": "vocab_en90%.json",
+  "test_data-en80%.pkl": "vocab_en80%.json",
+};
+const VOCAB_BASE_SIM_MAP = {
+  "vocab_en.json": 0.74,
+  "vocab_en90%.json": 0.71,
+  "vocab_en80%.json": 0.69,
+};
 
 function byId(id) {
   return document.getElementById(id);
@@ -22,6 +37,14 @@ function apiBase() {
 function setText(id, text) {
   const el = byId(id);
   if (el) el.textContent = text;
+}
+
+function normalizeStrategy(raw) {
+  const value = String(raw || "semslice").toLowerCase().trim();
+  if (value === "random" || value === "no_slice") return "noslice";
+  if (value === "semantic" || value === "semantic_slice" || value === "pso") return "semslice";
+  if (value === "weighted" || value === "latency_first") return "netslice";
+  return value === "semslice" || value === "netslice" || value === "noslice" ? value : "semslice";
 }
 
 async function callApi(path, body = null, method = "POST") {
@@ -55,6 +78,13 @@ function stopAdminRealtimePolling() {
   if (adminRealtimeTimer) {
     clearInterval(adminRealtimeTimer);
     adminRealtimeTimer = null;
+  }
+}
+
+function stopTenantRealtimePolling() {
+  if (tenantRealtimeTimer) {
+    clearInterval(tenantRealtimeTimer);
+    tenantRealtimeTimer = null;
   }
 }
 
@@ -130,7 +160,7 @@ function renderUnifiedCompareChart(comparisons) {
           const value = Number(row[metric.key] || 0);
           const height = Math.max(8, (value / maxVal) * 120);
           return `
-            <div class="metric-bar-item">
+            <div class="metric-bar-item" data-strategy="${strategyClass}" title="点击切换到 ${labels[strategy] || strategyClass}">
               <div class="metric-bar ${strategyClass}" style="height:${height.toFixed(1)}px"></div>
               <div class="metric-label">${labels[strategy] || strategy}</div>
               <div class="metric-value">${value.toFixed(metric.digits)}</div>
@@ -147,6 +177,18 @@ function renderUnifiedCompareChart(comparisons) {
       `;
     })
     .join("");
+
+  root.querySelectorAll(".metric-bar-item[data-strategy]").forEach((el) => {
+    el.style.cursor = "pointer";
+    el.addEventListener("click", () => {
+      const strategy = el.getAttribute("data-strategy");
+      const algoEl = byId("adminRunAlgorithm");
+      if (algoEl && strategy) {
+        algoEl.value = strategy;
+      }
+      applyAdminRuntimePolicy().catch((e) => setText("adminConfigStatus", e.message));
+    });
+  });
 }
 
 function networkPayloadFromForm() {
@@ -188,13 +230,15 @@ function showViewByRole() {
   const isAdmin = state.role === "admin";
   if (isAdmin) {
     startAdminRealtimePolling();
+    stopTenantRealtimePolling();
   } else {
     stopAdminRealtimePolling();
+    startTenantRealtimePolling();
   }
   byId("activeCount").classList.toggle("hidden", !isAdmin);
   byId("adminView").classList.toggle("hidden", !isAdmin);
   byId("tenantView").classList.toggle("hidden", isAdmin);
-  setText("pageTitle", isAdmin ? "管理员仪表盘" : "租户任务中心");
+  setText("pageTitle", isAdmin ? "管理员仪表盘" : "用户任务中心");
   setText("sessionText", `当前登录：${state.user.username}（${state.role}）`);
 }
 
@@ -207,7 +251,9 @@ function resetToLogin() {
   tenantTasks.length = 0;
   tenantTaskSeq = 1;
   adminRealtimeDigest = "";
+  tenantRealtimeDigest = "";
   stopAdminRealtimePolling();
+  stopTenantRealtimePolling();
 
   byId("appView").classList.add("hidden");
   byId("appView").style.display = "none";
@@ -219,9 +265,9 @@ function resetToLogin() {
 async function refreshAuthStats() {
   try {
     const stats = await callApi("/auth/stats", null, "GET");
-    setText("activeCount", `在线租户 ${stats.active_tenant_count || 0}`);
+    setText("activeCount", `在线用户 ${stats.active_user_count || 0}`);
   } catch (_error) {
-    setText("activeCount", "在线租户 -");
+    setText("activeCount", "在线用户 -");
   }
 }
 
@@ -244,6 +290,9 @@ async function login() {
     await syncAdminConfigStatus();
     await pullAdminRealtimeTasks();
     await refreshAdminUnifiedCompare();
+  } else {
+    await syncTenantConfigStatus();
+    await pullTenantRealtimeTasks();
   }
 }
 
@@ -265,7 +314,7 @@ async function loadAdminExample() {
     byId("energyThreshold").value = network.compute_energy_threshold ?? 650;
     byId("totalBandwidth").value = network.total_bandwidth ?? 2.4;
     byId("totalPower").value = network.total_power ?? 1.2;
-    byId("channelScenario").value = network.channel_scenario || "factory_indoor";
+    byId("channelScenario").value = network.channel_scenario || "snr_6";
 
     byId("sliceCount").value = slicing.slice_count ?? 3;
     byId("sliceNames").value = (slicing.slice_names || []).join(",");
@@ -279,9 +328,13 @@ async function loadAdminExample() {
 async function syncAdminConfigStatus() {
   try {
     const cfg = await callApi("/system/config/status", null, "GET");
+    const adminAlgoEl = byId("adminRunAlgorithm");
+    if (adminAlgoEl && cfg.allocation_algorithm) {
+      adminAlgoEl.value = cfg.allocation_algorithm;
+    }
     if (cfg.admin_config_ready) {
       setText("adminConfigStatus", "已发布：网络与切片配置已生效");
-      setText("adminSliceStatus", "切片配置已发布，租户可提交运行任务");
+      setText("adminSliceStatus", "切片配置已发布，用户可提交运行任务");
     } else if (cfg.network_configured || cfg.slicing_configured) {
       setText("adminConfigStatus", "部分已发布：请同时发布网络与切片");
     } else {
@@ -293,29 +346,102 @@ async function syncAdminConfigStatus() {
 }
 
 async function publishAdminConfig() {
+  let recomputeOk = false;
+  const publishedNetwork = await callApi("/module/network/config", networkPayloadFromForm());
+  const publishedSlicing = await callApi("/module/slice/config", slicePayloadFromForm());
+  const publishedSliceCount = (publishedSlicing.slices || []).length;
+  setText("adminSliceStatus", `切片已下发：共 ${publishedSliceCount} 个切片实例`);
+  setText("adminConfigStatus", `配置已下发：场景 ${publishedNetwork.network.channel_scenario}，正在按当前策略重算`);
+  try {
+    const rerun = await callApi("/system/admin/runtime-policy/recompute-current", {
+      adaptation_method: "similarity",
+    });
+    state.adminResult = rerun;
+    renderAdminTaskPanels(rerun);
+    recomputeOk = true;
+  } catch (error) {
+    setText(
+      "adminConfigStatus",
+      `配置已下发：场景 ${publishedNetwork.network.channel_scenario}；当前无可重算任务（${error.message}）`
+    );
+  }
+  adminRealtimeDigest = "";
+  await pullAdminRealtimeTasks();
+  if (recomputeOk) {
+    await syncAdminConfigStatus();
+  }
+  await refreshAdminUnifiedCompare();
+  return;
+
   const network = await callApi("/module/network/config", networkPayloadFromForm());
   const slicing = await callApi("/module/slice/config", slicePayloadFromForm());
   const sliceCount = (slicing.slices || []).length;
   setText("adminSliceStatus", `切片已发布：共 ${sliceCount} 个切片实例`);
-  setText("adminConfigStatus", `发布成功：场景 ${network.network.channel_scenario}，租户端已可运行`);
+  setText("adminConfigStatus", `发布成功：场景 ${network.network.channel_scenario}，用户端已可运行`);
+  setText("adminConfigStatus", `发布成功：场景 ${network.network.channel_scenario}，策略 ${runtimePolicy.allocation_algorithm}`);
+  adminRealtimeDigest = "";
+  await pullAdminRealtimeTasks();
   await syncAdminConfigStatus();
+  await refreshAdminUnifiedCompare();
 }
 
-async function runAdminQueuedTasks() {
-  const result = await callApi("/system/admin/run-submitted", {
-    adaptation_method: "similarity",
-    allocation_algorithm: byId("adminRunAlgorithm").value,
-  });
-  state.adminResult = result;
-  renderAdminTaskPanels(result);
-  const used = (result.allocation_output && result.allocation_output.used_resources) || {};
-  const total = (result.network_output && result.network_output.network) || {};
-  setText(
-    "adminRunStatus",
-    `运行完成：处理任务 ${result.business_output.users.length} 个；带宽 ${Number(used.bandwidth || 0).toFixed(3)}/${Number(total.total_bandwidth || 0).toFixed(3)}，功率 ${Number(used.power || 0).toFixed(3)}/${Number(total.total_power || 0).toFixed(3)}`
-  );
-  await refreshAdminUnifiedCompare();
+async function updateChannelScenarioAndRecompute() {
+  if (state.role !== "admin" || !state.token) return;
+  const selectedScenario = byId("channelScenario").value || "snr_6";
+  setText("adminConfigStatus", `信道已切换：${selectedScenario}，正在自动重算...`);
+  const publishedNetwork = await callApi("/module/network/config", networkPayloadFromForm());
+  let recomputeOk = false;
+  try {
+    const rerun = await callApi("/system/admin/runtime-policy/recompute-current", {
+      adaptation_method: "similarity",
+    });
+    state.adminResult = rerun;
+    renderAdminTaskPanels(rerun);
+    recomputeOk = true;
+  } catch (error) {
+    setText(
+      "adminConfigStatus",
+      `信道已更新：${publishedNetwork.network.channel_scenario}；重算失败（${error.message}）`
+    );
+  }
+  adminRealtimeDigest = "";
   await pullAdminRealtimeTasks();
+  if (recomputeOk) {
+    await refreshAdminUnifiedCompare();
+    setText("adminConfigStatus", `信道已更新并重算：${publishedNetwork.network.channel_scenario}`);
+  }
+}
+
+async function applyAdminRuntimePolicy() {
+  const newSelected = (byId("adminRunAlgorithm") && byId("adminRunAlgorithm").value) || "semslice";
+  const policyResult = await callApi("/system/admin/runtime-policy", {
+    allocation_algorithm: newSelected,
+  });
+  try {
+    adminRealtimeDigest = "";
+    await pullAdminRealtimeTasks();
+    await refreshAdminUnifiedCompare();
+    const ts = new Date().toLocaleTimeString();
+    setText("adminConfigStatus", `策略已切换（仅更新显示）：${policyResult.allocation_algorithm} @ ${ts}`);
+  } catch (error) {
+    setText("adminConfigStatus", `策略切换失败：${policyResult.allocation_algorithm}，${error.message}`);
+  }
+  return;
+
+  const selected = (byId("adminRunAlgorithm") && byId("adminRunAlgorithm").value) || "semslice";
+  const runtimePolicy = await callApi("/system/admin/runtime-policy", {
+    allocation_algorithm: selected,
+  });
+
+  try {
+    adminRealtimeDigest = "";
+    await pullAdminRealtimeTasks();
+    await refreshAdminUnifiedCompare();
+    const ts = new Date().toLocaleTimeString();
+    setText("adminConfigStatus", `策略已切换并重算：${runtimePolicy.allocation_algorithm} @ ${ts}`);
+  } catch (error) {
+    setText("adminConfigStatus", `策略切换失败：${runtimePolicy.allocation_algorithm}，${error.message}`);
+  }
 }
 
 async function refreshAdminUnifiedCompare() {
@@ -336,7 +462,21 @@ function buildAdminRealtimeDigest(run) {
 }
 
 function buildAdminBoardDigest(rows) {
-  return JSON.stringify((rows || []).map((r) => [r.tenant_id, r.user_id, r.updated_at, r.status]));
+  return JSON.stringify(
+    (rows || []).map((r) => [
+      r.user_id,
+      r.updated_at,
+      r.status,
+      r.allocation_algorithm,
+      r.slice_id || r.slice,
+      Number(r.bandwidth || 0).toFixed(6),
+      Number(r.power || 0).toFixed(6),
+      Number(r.compute || 0).toFixed(6),
+      Number(r.delay_ms || 0).toFixed(6),
+      Number(r.fidelity || 0).toFixed(6),
+      Number(r.snr_db || 0).toFixed(6),
+    ])
+  );
 }
 
 function renderAdminBoardRows(rows) {
@@ -345,10 +485,10 @@ function renderAdminBoardRows(rows) {
   renderTable(
     "adminTaskTable",
     sorted.map((row) => ({
-      tenant_id: row.tenant_id,
       user_id: row.user_id,
+      strategy: row.allocation_algorithm || "-",
       requirement: row.requirement,
-      domain: row.domain,
+      task_vocab: row.task_vocab || "-",
       slice: row.slice,
       bandwidth: Number(row.bandwidth || 0).toFixed(4),
       bw_share: `${((Number(row.bandwidth || 0) / Math.max(Number(row.total_bandwidth || 0), 1e-9)) * 100).toFixed(2)}%`,
@@ -367,7 +507,6 @@ function renderAdminBoardRows(rows) {
   renderTable(
     "adminMetricQueue",
     sorted.map((row) => ({
-      tenant_id: row.tenant_id,
       user_id: row.user_id,
       slice_id: row.slice_id || "-",
       delay_ms: Number(row.delay_ms || 0).toFixed(4),
@@ -386,10 +525,9 @@ function renderAdminPendingQueueRows(rows) {
   renderTable(
     "adminMetricQueue",
     pending.map((row) => ({
-      tenant_id: row.tenant_id || "-",
       user_id: row.user_id || "-",
       requirement: row.requirement_type || "-",
-      domain: row.domain_type || "-",
+      task_vocab: row.task_vocab || "-",
       status: row.status || "待运行",
       submitted_at: row.submitted_at || "-",
     }))
@@ -401,7 +539,11 @@ async function pullAdminRealtimeTasks() {
   try {
     await refreshAuthStats();
     const snapshot = await callApi("/state", null, "GET");
-    const board = snapshot.admin_task_board || [];
+    const selectedStrategy = normalizeStrategy(
+      (byId("adminRunAlgorithm") && byId("adminRunAlgorithm").value) || snapshot.allocation_algorithm || "semslice"
+    );
+    const strategyBoards = snapshot.strategy_boards || {};
+    const board = strategyBoards[selectedStrategy] || snapshot.admin_task_board || [];
     const pending = snapshot.pending_tasks || [];
 
     if (board.length) {
@@ -409,6 +551,7 @@ async function pullAdminRealtimeTasks() {
       if (digest !== adminRealtimeDigest) {
         adminRealtimeDigest = digest;
         renderAdminBoardRows(board);
+        await refreshAdminUnifiedCompare();
       }
       if (pending.length) {
         renderAdminPendingQueueRows(pending);
@@ -421,10 +564,9 @@ async function pullAdminRealtimeTasks() {
       renderTable(
         "adminTaskTable",
         pending.map((row) => ({
-          tenant_id: row.tenant_id || "-",
           user_id: row.user_id || "-",
           requirement: row.requirement_type || "-",
-          domain: row.domain_type || "-",
+          task_vocab: row.task_vocab || "-",
           status: row.status || "待运行",
           submitted_at: row.submitted_at || "-",
         }))
@@ -434,9 +576,10 @@ async function pullAdminRealtimeTasks() {
       return;
     }
 
-    const run = snapshot.last_new_run;
+    const strategyRuns = snapshot.strategy_runs || {};
+    const run = strategyRuns[selectedStrategy] || snapshot.last_new_run;
     if (!run || !run.business_output || !run.business_output.users || !run.business_output.users.length) {
-      setText("adminRealtimeStatus", "等待租户提交任务");
+      setText("adminRealtimeStatus", "等待用户提交任务");
       return;
     }
 
@@ -444,10 +587,79 @@ async function pullAdminRealtimeTasks() {
     if (digest !== adminRealtimeDigest) {
       adminRealtimeDigest = digest;
       renderAdminTaskPanels(run);
+      await refreshAdminUnifiedCompare();
     }
     setText("adminRealtimeStatus", `实时同步中：最新任务数 ${run.business_output.users.length}`);
   } catch (_error) {
     setText("adminRealtimeStatus", "实时同步失败");
+  }
+}
+
+function buildTenantResultFromSnapshot(snapshot) {
+  const strategyRuns = (snapshot && snapshot.strategy_runs) || {};
+  const selected = normalizeStrategy((snapshot && snapshot.allocation_algorithm) || "semslice");
+  const run = strategyRuns[selected] || (snapshot && snapshot.last_new_run) || null;
+  if (!run || !run.business_output || !run.business_output.users) return null;
+  return run;
+}
+
+function mergeTenantTasksFromResult(result) {
+  const users = (result && result.business_output && result.business_output.users) || [];
+  const adapts = (result && result.adaptation_output && result.adaptation_output.relations) || [];
+  if (!users.length) return;
+
+  const sliceMap = Object.fromEntries(adapts.map((row) => [row.user_id, row.matched_slice_name]));
+  const taskMap = Object.fromEntries(tenantTasks.map((task) => [task.task_id, task]));
+  let maxSeq = tenantTaskSeq - 1;
+
+  users.forEach((user) => {
+    const taskId = String(user.user_id);
+    const existing = taskMap[taskId];
+    const nextTask = existing || {
+      task_id: taskId,
+      domain_type: "generic",
+      status: TASK_STATUS_RUNNING,
+      slice_name: "-",
+    };
+    nextTask.requirement_type = user.requirement_type || nextTask.requirement_type || "high_fidelity";
+    nextTask.payload_symbols = Number(user.payload_symbols || nextTask.payload_symbols || 12);
+    nextTask.distance_m = Number(user.distance_m || nextTask.distance_m || 2600);
+    nextTask.task_pkl = user.task_pkl || nextTask.task_pkl || "test_data_en.pkl";
+    nextTask.task_vocab = user.task_vocab || nextTask.task_vocab || "vocab_en.json";
+    nextTask.status = TASK_STATUS_RUNNING;
+    nextTask.slice_name = sliceMap[taskId] || nextTask.slice_name || "-";
+    if (!existing) {
+      tenantTasks.push(nextTask);
+      taskMap[taskId] = nextTask;
+    }
+    const match = /^task-(\d+)$/.exec(taskId);
+    if (match) {
+      maxSeq = Math.max(maxSeq, Number(match[1]));
+    }
+  });
+  tenantTaskSeq = Math.max(tenantTaskSeq, maxSeq + 1);
+}
+
+function buildTenantRealtimeDigest(result) {
+  const metrics = (result && result.performance_output && result.performance_output.user_metrics) || [];
+  return JSON.stringify(metrics.map((m) => [m.user_id, m.delay_ms, m.fidelity, m.snr_db]));
+}
+
+async function pullTenantRealtimeTasks() {
+  if (state.role !== "user" || !state.token) return;
+  try {
+    const snapshot = await callApi("/state", null, "GET");
+    const tenantResult = buildTenantResultFromSnapshot(snapshot);
+    if (!tenantResult) return;
+    const digest = buildTenantRealtimeDigest(tenantResult);
+    if (digest === tenantRealtimeDigest) return;
+    tenantRealtimeDigest = digest;
+    state.tenantResult = tenantResult;
+    mergeTenantTasksFromResult(tenantResult);
+    renderTenantPanels(tenantResult);
+    setText("tenantTaskStatus", `已同步最近运行结果：${(tenantResult.business_output.users || []).length} 个任务`);
+  } catch (_error) {
+    // keep current tenant view when realtime sync fails
   }
 }
 
@@ -459,10 +671,19 @@ function startAdminRealtimePolling() {
   }, 3000);
 }
 
+function startTenantRealtimePolling() {
+  stopTenantRealtimePolling();
+  pullTenantRealtimeTasks().catch(() => {});
+  tenantRealtimeTimer = setInterval(() => {
+    pullTenantRealtimeTasks().catch(() => {});
+  }, 3000);
+}
+
 function renderAdminTaskPanels(result) {
   const adapts = (result.adaptation_output && result.adaptation_output.relations) || [];
   const allocs = (result.allocation_output && result.allocation_output.allocations) || [];
   const metrics = (result.performance_output && result.performance_output.user_metrics) || [];
+  const users = (result.business_output && result.business_output.users) || [];
   const network = (result.network_output && result.network_output.network) || {};
   const totalBandwidth = Number(network.total_bandwidth || 0);
   const totalPower = Number(network.total_power || 0);
@@ -470,15 +691,17 @@ function renderAdminTaskPanels(result) {
 
   const allocMap = Object.fromEntries(allocs.map((row) => [row.user_id, row]));
   const metricMap = Object.fromEntries(metrics.map((row) => [row.user_id, row]));
+  const userMap = Object.fromEntries(users.map((row) => [row.user_id, row]));
 
   const rows = adapts.map((row) => {
     const alloc = allocMap[row.user_id] || {};
     const metric = metricMap[row.user_id] || {};
+    const business = userMap[row.user_id] || {};
     return {
       user_id: row.user_id,
-      tenant_id: row.tenant_id,
+      strategy: (byId("adminRunAlgorithm") && byId("adminRunAlgorithm").value) || "-",
       requirement: row.requirement_type,
-      domain: row.domain_type,
+      task_vocab: business.task_vocab || "-",
       slice: row.matched_slice_name,
       bandwidth: Number(alloc.bandwidth || 0).toFixed(4),
       bw_share: `${((Number(alloc.bandwidth || 0) / Math.max(totalBandwidth, 1e-9)) * 100).toFixed(2)}%`,
@@ -528,7 +751,7 @@ function addTenantTask() {
   const task = {
     task_id: `task-${tenantTaskSeq++}`,
     requirement_type: byId("tenantReq").value,
-    domain_type: byId("tenantDomain").value,
+    domain_type: "generic",
     payload_symbols: Number(byId("tenantPayload").value || 12),
     distance_m: Number(byId("tenantDistance").value || 2600),
     status: "未提交",
@@ -539,21 +762,22 @@ function addTenantTask() {
   setText("tenantTaskStatus", `已添加任务 ${task.task_id}，当前总任务 ${tenantTasks.length}`);
 }
 
-function tenantSubmitBusinessPayload() {
-  const submitted = tenantTasks.filter((task) => task.status === "已提交");
+function tenantSubmitBusinessPayload(tasksToSubmit = null) {
+  const submitted =
+    tasksToSubmit && tasksToSubmit.length
+      ? tasksToSubmit
+      : tenantTasks.filter((task) => task.status !== "已运行");
   if (!submitted.length) {
-    throw new Error("请先添加任务并提交");
+    throw new Error("没有可提交的新任务，请先添加任务");
   }
 
   return {
     user_count: submitted.length,
     modality: "text",
     default_requirement_type: "high_fidelity",
-    default_domain_type: "animal",
-    tenant_id: state.user.tenant_id || "tenant-1",
+    default_domain_type: "generic",
     users: submitted.map((task) => ({
       user_id: task.task_id,
-      tenant_id: state.user.tenant_id || "tenant-1",
       modality: "text",
       requirement_type: task.requirement_type,
       domain_type: task.domain_type,
@@ -565,6 +789,7 @@ function tenantSubmitBusinessPayload() {
 }
 
 function renderTenantPanels(result) {
+  mergeTenantTasksFromResult(result);
   const allocs = (result.allocation_output && result.allocation_output.allocations) || [];
   const metrics = (result.performance_output && result.performance_output.user_metrics) || [];
   const adapts = (result.adaptation_output && result.adaptation_output.relations) || [];
@@ -604,11 +829,222 @@ async function submitTenantTasks() {
   if (!tenantTasks.length) {
     throw new Error("请先添加任务");
   }
-  tenantTasks.forEach((task) => {
-    if (task.status === "未提交") task.status = "已提交";
+  const tasksToSubmit = tenantTasks.filter((task) => task.status !== "已运行");
+  if (!tasksToSubmit.length) {
+    throw new Error("没有可提交的新任务，请先添加任务");
+  }
+  tasksToSubmit.forEach((task) => {
+    task.status = "已提交";
   });
+  renderTenantTaskTable();
 
-  const result = await callApi("/system/tenant/submit", tenantSubmitBusinessPayload());
+  const result = await callApi("/system/user/submit", tenantSubmitBusinessPayload(tasksToSubmit));
+  const runResult = result.run_result || result.result || null;
+
+  if (runResult) {
+    state.tenantResult = runResult;
+    mergeTenantTasksFromResult(runResult);
+    const submittedSet = new Set(tasksToSubmit.map((task) => task.task_id));
+    tenantTasks.forEach((task) => {
+      if (submittedSet.has(task.task_id)) {
+        task.status = "已运行";
+      }
+    });
+    renderTenantPanels(runResult);
+    tenantRealtimeDigest = buildTenantRealtimeDigest(runResult);
+
+    const core =
+      result.core_metrics ||
+      (runResult.performance_output && runResult.performance_output.core_metrics) ||
+      {};
+    setText(
+      "tenantTaskStatus",
+              `提交并实时运行完成：${result.submitted_count || 0} 个，平均时延 ${Number(core.avg_delay_ms || 0).toFixed(4)}，平均保真度 ${Number(core.avg_fidelity || 0).toFixed(4)}`
+    );
+    return;
+  }
+
+  setText("tenantTaskStatus", `提交成功：本次 ${result.submitted_count || 0} 个，待运行总数 ${result.pending_total || 0}`);
+}
+
+function ensureTenantDatasetSelectors() {
+  if (byId("tenantPkl") && byId("tenantVocab")) return;
+  const tenantReqEl = byId("tenantReq");
+  if (!tenantReqEl) return;
+  const formGrid = tenantReqEl.closest(".form-grid");
+  if (!formGrid) return;
+
+  const pklRow = document.createElement("div");
+  pklRow.className = "form-row";
+  pklRow.innerHTML =
+    '<label>任务 PKL</label><select id="tenantPkl"><option value="test_data_en.pkl">test_data_en.pkl</option><option value="test_data-en90%.pkl">test_data-en90%.pkl</option><option value="test_data-en80%.pkl">test_data-en80%.pkl</option></select>';
+
+  const vocabRow = document.createElement("div");
+  vocabRow.className = "form-row";
+  vocabRow.innerHTML =
+    '<label>词表 JSON</label><select id="tenantVocab"><option value="vocab_en.json">vocab_en.json</option><option value="vocab_en90%.json">vocab_en90%.json</option><option value="vocab_en80%.json">vocab_en80%.json</option></select>';
+
+  formGrid.appendChild(pklRow);
+  formGrid.appendChild(vocabRow);
+}
+
+function syncTenantPklVocab() {
+  const pklEl = byId("tenantPkl");
+  const vocabEl = byId("tenantVocab");
+  if (!pklEl || !vocabEl) return;
+  vocabEl.value = PKL_VOCAB_MAP[pklEl.value] || "vocab_en.json";
+}
+
+async function fetchSystemConfigStatus() {
+  return callApi("/system/config/status", null, "GET");
+}
+
+async function syncTenantConfigStatus() {
+  try {
+    const cfg = await fetchSystemConfigStatus();
+    if (cfg.admin_config_ready) {
+      setText("tenantTaskStatus", "管理员配置已下发，可提交任务");
+    } else {
+      setText("tenantTaskStatus", "管理员尚未下发网络与切片配置，暂不可提交任务");
+    }
+    return cfg;
+  } catch (_error) {
+    setText("tenantTaskStatus", "配置状态读取失败，请稍后重试");
+    return null;
+  }
+}
+
+async function ensureTenantConfigReady() {
+  const cfg = await fetchSystemConfigStatus();
+  if (!cfg.admin_config_ready) {
+    throw new Error("管理员尚未下发网络与切片配置，暂不可提交任务");
+  }
+}
+
+function resolveTaskSimilarity(task) {
+  return VOCAB_BASE_SIM_MAP[task.task_vocab] || 0.72;
+}
+
+function displayTaskStatus(status) {
+  if (status === TASK_STATUS_PENDING) return "未提交";
+  if (status === TASK_STATUS_SUBMITTED) return "已提交";
+  if (status === TASK_STATUS_RUNNING) return "已运行";
+  return status || "-";
+}
+
+function renderTenantTaskTable() {
+  const rows = tenantTasks.map((task) => ({
+    task_id: task.task_id,
+    requirement: task.requirement_type,
+    task_vocab: task.task_vocab || "-",
+    payload_symbols: task.payload_symbols,
+    distance_m: task.distance_m,
+    task_pkl: task.task_pkl || "-",
+    status: displayTaskStatus(task.status),
+    slice: task.slice_name || "-",
+  }));
+  renderTable("tenantTaskTable", rows);
+}
+
+function addTenantTask() {
+  const pklEl = byId("tenantPkl");
+  const vocabEl = byId("tenantVocab");
+  const task = {
+    task_id: `task-${tenantTaskSeq++}`,
+    requirement_type: byId("tenantReq").value,
+    domain_type: "generic",
+    payload_symbols: Number(byId("tenantPayload").value || 12),
+    distance_m: Number(byId("tenantDistance").value || 2600),
+    task_pkl: pklEl ? pklEl.value : "test_data_en.pkl",
+    task_vocab: vocabEl ? vocabEl.value : "vocab_en.json",
+    status: TASK_STATUS_PENDING,
+    slice_name: "-",
+  };
+  tenantTasks.push(task);
+  renderTenantTaskTable();
+  setText("tenantTaskStatus", `已添加任务 ${task.task_id}，当前总任务 ${tenantTasks.length}`);
+}
+
+function tenantSubmitBusinessPayload(tasksToSubmit = null) {
+  const submitted =
+    tasksToSubmit && tasksToSubmit.length
+      ? tasksToSubmit
+      : tenantTasks.filter((task) => task.status !== TASK_STATUS_RUNNING);
+  if (!submitted.length) {
+    throw new Error("没有可提交的新任务，请先添加任务");
+  }
+
+  return {
+    user_count: submitted.length,
+    modality: "text",
+    default_requirement_type: "high_fidelity",
+    default_domain_type: "generic",
+    users: submitted.map((task) => ({
+      user_id: task.task_id,
+      modality: "text",
+      requirement_type: task.requirement_type,
+      domain_type: "generic",
+      payload_symbols: task.payload_symbols,
+      distance_m: task.distance_m,
+      base_similarity: resolveTaskSimilarity(task),
+      task_pkl: task.task_pkl,
+      task_vocab: task.task_vocab,
+    })),
+  };
+}
+
+async function submitTenantTasks() {
+  if (!tenantTasks.length) {
+    throw new Error("请先添加任务");
+  }
+  await ensureTenantConfigReady();
+
+  const tasksToSubmit = tenantTasks.filter((task) => task.status !== TASK_STATUS_RUNNING);
+  if (!tasksToSubmit.length) {
+    throw new Error("没有可提交的新任务，请先添加任务");
+  }
+
+  const statusBackup = new Map(tasksToSubmit.map((task) => [task.task_id, task.status]));
+  tasksToSubmit.forEach((task) => {
+    task.status = TASK_STATUS_SUBMITTED;
+  });
+  renderTenantTaskTable();
+
+  let result = null;
+  try {
+    result = await callApi("/system/user/submit", tenantSubmitBusinessPayload(tasksToSubmit));
+  } catch (error) {
+    tasksToSubmit.forEach((task) => {
+      task.status = statusBackup.get(task.task_id) || TASK_STATUS_PENDING;
+    });
+    renderTenantTaskTable();
+    throw error;
+  }
+  const runResult = result.run_result || result.result || null;
+
+  if (runResult) {
+    state.tenantResult = runResult;
+    mergeTenantTasksFromResult(runResult);
+    const submittedSet = new Set(tasksToSubmit.map((task) => task.task_id));
+    tenantTasks.forEach((task) => {
+      if (submittedSet.has(task.task_id)) {
+        task.status = TASK_STATUS_RUNNING;
+      }
+    });
+    renderTenantPanels(runResult);
+    tenantRealtimeDigest = buildTenantRealtimeDigest(runResult);
+
+    const core =
+      result.core_metrics ||
+      (runResult.performance_output && runResult.performance_output.core_metrics) ||
+      {};
+    setText(
+      "tenantTaskStatus",
+              `提交并实时运行完成：${result.submitted_count || 0} 个，平均时延 ${Number(core.avg_delay_ms || 0).toFixed(4)}，平均保真度 ${Number(core.avg_fidelity || 0).toFixed(4)}`
+    );
+    return;
+  }
+
   setText("tenantTaskStatus", `提交成功：本次 ${result.submitted_count || 0} 个，待运行总数 ${result.pending_total || 0}`);
 }
 
@@ -621,13 +1057,33 @@ function bindEvents() {
       byId("username").value = "admin";
       byId("password").value = "admin123";
     } else {
-      byId("username").value = "tenant1";
-      byId("password").value = "tenant123";
+      byId("username").value = "user1";
+      byId("password").value = "user123";
     }
   });
 
   byId("adminPublishBtn").addEventListener("click", () => publishAdminConfig().catch((e) => setText("adminConfigStatus", e.message)));
-  byId("adminRunQueuedBtn").addEventListener("click", () => runAdminQueuedTasks().catch((e) => setText("adminRunStatus", e.message)));
+  const channelScenarioEl = byId("channelScenario");
+  if (channelScenarioEl) {
+    channelScenarioEl.addEventListener("change", () => {
+      updateChannelScenarioAndRecompute().catch((e) => setText("adminConfigStatus", e.message));
+    });
+  }
+  const adminAlgoEl = byId("adminRunAlgorithm");
+  if (adminAlgoEl) {
+    const applyPolicyFromSelector = () => {
+      setText("adminConfigStatus", "策略切换中...");
+      applyAdminRuntimePolicy().catch((e) => setText("adminConfigStatus", e.message));
+    };
+    adminAlgoEl.addEventListener("change", applyPolicyFromSelector);
+    adminAlgoEl.addEventListener("input", applyPolicyFromSelector);
+  }
+  ensureTenantDatasetSelectors();
+  const tenantPklEl = byId("tenantPkl");
+  if (tenantPklEl) {
+    tenantPklEl.addEventListener("change", syncTenantPklVocab);
+    syncTenantPklVocab();
+  }
   byId("addTaskBtn").addEventListener("click", () => {
     try {
       addTenantTask();

@@ -1,4 +1,4 @@
-﻿from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -137,37 +137,39 @@ class LegacyStrategyCompareResponse(BaseModel):
     scenario: str
     resource_vector: List[float]
     comparisons: List[LegacyStrategySummary]
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str
-    system_type: str = "tenant"
+    system_type: str = "user"
 
 
 class LoginResponse(BaseModel):
     token: str
     role: str
     username: str
-    tenant_id: Optional[str] = None
+    user_id: Optional[int] = None
     system_home: str
 
 
 class UserBusinessItem(BaseModel):
     user_id: str
-    tenant_id: str = "tenant-1"
     modality: str = "text"
     requirement_type: str = "high_fidelity"
-    domain_type: str = "animal"
+    domain_type: str = "generic"
     payload_symbols: int = Field(10, ge=1)
     distance_m: float = Field(3000, gt=0)
     base_similarity: float = Field(0.72, ge=0, le=1)
+    task_pkl: Optional[str] = None
+    task_vocab: Optional[str] = None
 
 
 class BusinessConfig(BaseModel):
     user_count: int = Field(3, ge=1)
     modality: str = "text"
     default_requirement_type: str = "high_fidelity"
-    default_domain_type: str = "animal"
-    tenant_id: str = "tenant-1"
+    default_domain_type: str = "generic"
     users: List[UserBusinessItem] = Field(default_factory=list)
 
 
@@ -181,7 +183,7 @@ class NetworkConfig(BaseModel):
     compute_energy_threshold: float = Field(500.0, gt=0)
     total_bandwidth: float = Field(2.0, gt=0)
     total_power: float = Field(1.0, gt=0)
-    channel_scenario: str = "factory_indoor"
+    channel_scenario: str = "snr_6"
 
 
 class NetworkConfigResponse(BaseModel):
@@ -231,7 +233,6 @@ class AdaptationRequest(BaseModel):
 
 class AdaptationRow(BaseModel):
     user_id: str
-    tenant_id: str
     domain_type: str
     requirement_type: str
     matched_slice_id: str
@@ -247,7 +248,6 @@ class AdaptationResponse(BaseModel):
 
 class UserResourceAllocation(BaseModel):
     user_id: str
-    tenant_id: str
     slice_id: str
     bandwidth: float
     power: float
@@ -274,6 +274,7 @@ class PerformanceEvaluateRequest(BaseModel):
     allocations: List[UserResourceAllocation]
     network: NetworkConfig
     relations: List[AdaptationRow] = Field(default_factory=list)
+    allocation_algorithm: str = "semslice"
 
 
 class PerformanceEvaluateResponse(BaseModel):
@@ -305,7 +306,7 @@ class WorkflowState(BaseModel):
     network_configured: bool = False
     slicing_configured: bool = False
     admin_config_ready: bool = False
+    strategy_runs: Dict[str, FullSystemResponse] = Field(default_factory=dict)
+    strategy_boards: Dict[str, List[Dict[str, Union[str, float, bool]]]] = Field(default_factory=dict)
     admin_task_board: List[Dict[str, Union[str, float, bool]]] = Field(default_factory=list)
     pending_tasks: List[Dict[str, Union[str, float, bool, int]]] = Field(default_factory=list)
-
-

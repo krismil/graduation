@@ -1,66 +1,53 @@
-﻿import re
-import secrets
 from typing import Dict, List, Optional
 
 from fastapi import Header, HTTPException
 
 from app.models.schemas import LoginRequest, LoginResponse
+from app.store.repository import (
+    create_session,
+    delete_session,
+    get_auth_stats as repo_get_auth_stats,
+    get_session_user,
+    get_user_by_username,
+    verify_password,
+)
 
 
-USERS = {
-    "admin": {"password": "admin123", "role": "admin", "tenant_id": None},
-    "tenant1": {"password": "tenant123", "role": "tenant", "tenant_id": "tenant-1"},
-    "tenant2": {"password": "tenant123", "role": "tenant", "tenant_id": "tenant-2"},
-}
-
-SESSIONS = {}
-
-
-def _dynamic_tenant_account(username: str) -> Optional[Dict[str, Optional[str]]]:
-    match = re.fullmatch(r"tenant(\d+)", username or "")
-    if not match:
-        return None
-    idx = int(match.group(1))
-    if idx <= 0:
-        return None
-    return {"password": "tenant123", "role": "tenant", "tenant_id": f"tenant-{idx}"}
+def _normalize_system_type(raw: str) -> str:
+    value = str(raw or "user").strip().lower()
+    if value == "tenant":
+        return "user"
+    return value
 
 
 def login(payload: LoginRequest) -> LoginResponse:
-    account = USERS.get(payload.username)
-    if account is None:
-        dynamic = _dynamic_tenant_account(payload.username)
-        if dynamic is not None:
-            USERS[payload.username] = dynamic
-            account = dynamic
-    if account is None or account.get("password") != payload.password:
+    account = get_user_by_username(payload.username)
+    if account is None or account.get("status") != "active":
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    if not verify_password(payload.password, str(account.get("password_hash", ""))):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
-    if payload.system_type == "admin" and account.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="当前账号不是管理员")
-    if payload.system_type == "tenant" and account.get("role") != "tenant":
-        raise HTTPException(status_code=403, detail="当前账号不是租户")
+    system_type = _normalize_system_type(payload.system_type)
+    role = str(account.get("role"))
 
-    token = secrets.token_urlsafe(24)
-    user_ctx = {
-        "username": payload.username,
-        "role": account["role"],
-        "tenant_id": account.get("tenant_id"),
-    }
-    SESSIONS[token] = user_ctx
-    home = "/admin/dashboard" if account["role"] == "admin" else "/tenant/dashboard"
+    if system_type == "admin" and role != "admin":
+        raise HTTPException(status_code=403, detail="当前账号不是管理员")
+    if system_type == "user" and role != "user":
+        raise HTTPException(status_code=403, detail="当前账号不是普通用户")
+
+    token = create_session(int(account["id"]))
+    home = "/admin/dashboard" if role == "admin" else "/user/dashboard"
     return LoginResponse(
         token=token,
-        role=account["role"],
-        username=payload.username,
-        tenant_id=account.get("tenant_id"),
+        role=role,
+        username=str(account["username"]),
+        user_id=int(account["id"]),
         system_home=home,
     )
 
 
 def logout(token: str) -> None:
-    if token in SESSIONS:
-        SESSIONS.pop(token)
+    delete_session(token)
 
 
 def _parse_token(authorization: Optional[str]) -> str:
@@ -73,7 +60,7 @@ def _parse_token(authorization: Optional[str]) -> str:
 
 def get_current_user(authorization: str = Header(None)) -> Dict[str, Optional[str]]:
     token = _parse_token(authorization)
-    user = SESSIONS.get(token)
+    user = get_session_user(token)
     if user is None:
         raise HTTPException(status_code=401, detail="登录已过期")
     return user
@@ -89,13 +76,4 @@ def extract_token_from_header(authorization: Optional[str]) -> str:
 
 
 def get_auth_stats() -> Dict[str, object]:
-    sessions = list(SESSIONS.values())
-    active_usernames = sorted(set(user.get("username") for user in sessions if user.get("username")))
-    active_tenant_ids = sorted(set(user.get("tenant_id") for user in sessions if user.get("tenant_id")))
-    return {
-        "active_session_count": len(SESSIONS),
-        "active_user_count": len(active_usernames),
-        "active_tenant_count": len(active_tenant_ids),
-        "active_users": active_usernames,
-        "active_tenants": active_tenant_ids,
-    }
+    return repo_get_auth_stats()

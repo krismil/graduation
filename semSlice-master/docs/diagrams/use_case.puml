@@ -1,4 +1,4 @@
-@startuml
+﻿@startuml
 left to right direction
 
 skinparam backgroundColor #FFFFFF
@@ -21,57 +21,52 @@ skinparam usecase {
 }
 
 actor "管理员" as Admin
-actor "租户" as Tenant
+actor "租户用户" as Tenant
 
-rectangle "语义通信切片系统" as SYS #F5F5F5 {
-  package "接入与配置" as P1 #F8FBFF {
-    usecase "登录/登出" as UC_Login
-    usecase "业务配置" as UC_Business
-    usecase "网络配置\n（管理员）" as UC_Network
-    usecase "切片配置\n（管理员）" as UC_Slice
+rectangle "语义通信切片系统（精简版）" as SYS #F5F5F5 {
+  package "一级用例（总览）" as L1 #F8FBFF {
+    usecase "认证与权限模块" as UC1
+    usecase "语义通信模块" as UC2
+    usecase "切片构建与分发模块" as UC3
+    usecase "切片与业务适配模块" as UC4
+    usecase "资源管理与编排模块" as UC5
+    usecase "性能评估与分析模块" as UC6
   }
 
-  package "执行与评估" as P2 #F8FBFF {
-    usecase "业务-切片适配" as UC_Adapt
-    usecase "资源分配" as UC_Alloc
-    usecase "性能评估" as UC_Eval
-    usecase "一键运行全流程" as UC_Run
+  package "切片与业务适配" as F1 #F8FBFF {
+    usecase "A1 业务画像构建" as A1
+    usecase "A2 匹配评分计算" as A2
+    usecase "A3 最优切片输出" as A3
+    A3 .> A1 : <<include>>
+    A3 .> A2 : <<include>>
   }
 
-  package "对比与复现" as P3 #F8FBFF {
-    usecase "三策略性能对比" as UC_Compare
-    usecase "调用 legacy 实验后端" as UC_Legacy
+  package "资源管理与编排" as F2 #F8FBFF {
+    usecase "B1 分配算法选择" as B1
+    usecase "B2 用户级资源分配" as B2
+    usecase "B3 约束校验与修正" as B3
+    B2 .> B1 : <<include>>
+    B2 .> B3 : <<include>>
   }
 }
 
-Admin --> UC_Login
-Tenant --> UC_Login
+Admin --> UC1
+Admin --> UC2
+Admin --> UC3
+Admin --> UC4
+Admin --> UC5
+Admin --> UC6
 
-Admin --> UC_Business
-Tenant --> UC_Business
+Tenant --> UC1
+Tenant --> UC2
+Tenant --> UC4
+Tenant --> UC5
+Tenant --> UC6
 
-Admin --> UC_Network
-Admin --> UC_Slice
+UC4 .> UC2 : <<include>>
+UC5 .> UC4 : <<include>>
+UC6 .> UC5 : <<include>>
 
-Admin --> UC_Adapt
-Tenant --> UC_Adapt
-
-Admin --> UC_Alloc
-Tenant --> UC_Alloc
-
-Admin --> UC_Eval
-Tenant --> UC_Eval
-
-Admin --> UC_Run
-Tenant --> UC_Run
-
-Admin --> UC_Compare
-Tenant --> UC_Compare
-
-UC_Run .> UC_Adapt : <<include>>
-UC_Run .> UC_Alloc : <<include>>
-UC_Run .> UC_Eval : <<include>>
-
-UC_Alloc .> UC_Legacy : <<extend>>
-UC_Compare .> UC_Legacy : <<include>>
+UC4 .> A3 : <<refine>>
+UC5 .> B2 : <<refine>>
 @enduml

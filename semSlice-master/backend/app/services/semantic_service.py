@@ -17,11 +17,9 @@ from app.models.schemas import (
 
 
 RANDOM = random.Random(2026)
+DEFAULT_CHANNEL_SCENARIO = "snr_6"
 CHANNEL_SCENARIOS = {
-    "factory_indoor": {"noise_dbm": -106.0, "distance_factor": 0.85, "delay_ref_ms": 0.90},
-    "satellite_link": {"noise_dbm": -118.0, "distance_factor": 1.8, "delay_ref_ms": 1.30},
-    "urban_macro": {"noise_dbm": -110.5, "distance_factor": 1.15, "delay_ref_ms": 1.00},
-    # 便于按“信道类型=目标SNR”方式做曲线验证（-6dB 到 12dB）
+    # 按目标 SNR 离散配置（-6 dB 到 12 dB）
     "snr_m6": {"noise_dbm": -104.5, "distance_factor": 1.15, "delay_ref_ms": 1.40},
     "snr_m4": {"noise_dbm": -106.5, "distance_factor": 1.15, "delay_ref_ms": 1.30},
     "snr_m2": {"noise_dbm": -108.5, "distance_factor": 1.15, "delay_ref_ms": 1.20},
@@ -33,10 +31,15 @@ CHANNEL_SCENARIOS = {
     "snr_10": {"noise_dbm": -120.5, "distance_factor": 1.15, "delay_ref_ms": 0.70},
     "snr_12": {"noise_dbm": -122.5, "distance_factor": 1.15, "delay_ref_ms": 0.64},
 }
-DOMAIN_BASE_SIMILARITY = {
-    "animal": 0.74,
-    "music": 0.71,
-    "sports": 0.69,
+PKL_TO_VOCAB = {
+    "test_data_en.pkl": "vocab_en.json",
+    "test_data-en90%.pkl": "vocab_en90%.json",
+    "test_data-en80%.pkl": "vocab_en80%.json",
+}
+VOCAB_BASE_SIMILARITY = {
+    "vocab_en.json": 0.74,
+    "vocab_en90%.json": 0.71,
+    "vocab_en80%.json": 0.69,
 }
 
 
@@ -111,23 +114,44 @@ def process_services(services: List[ServiceProfile], noise_dbm: float) -> Semant
     return SemanticProcessResponse(items=results, summary=summary)
 
 
+def _normalize_vocab_name(task_vocab: str, task_pkl: str) -> str:
+    vocab = str(task_vocab or "").strip()
+    if vocab:
+        return vocab
+    pkl_name = str(task_pkl or "").strip()
+    return PKL_TO_VOCAB.get(pkl_name, "vocab_en.json")
+
+
+def _resolve_base_similarity(task_vocab: str, task_pkl: str, base_similarity: float) -> float:
+    vocab_name = _normalize_vocab_name(task_vocab, task_pkl)
+    if vocab_name in VOCAB_BASE_SIMILARITY:
+        return float(VOCAB_BASE_SIMILARITY[vocab_name])
+    return float(base_similarity)
+
+
 def _auto_users_from_business(config: BusinessConfig) -> List[UserBusinessItem]:
     req_types = ["high_fidelity", "low_latency"]
-    domains = ["animal", "music", "sports"]
+    task_profiles = [
+        ("test_data_en.pkl", "vocab_en.json"),
+        ("test_data-en90%.pkl", "vocab_en90%.json"),
+        ("test_data-en80%.pkl", "vocab_en80%.json"),
+    ]
     users: List[UserBusinessItem] = []
     for idx in range(config.user_count):
         req_type = config.default_requirement_type if config.default_requirement_type in req_types else req_types[idx % 2]
-        domain = config.default_domain_type if config.default_domain_type in domains else domains[idx % 3]
+        task_pkl, task_vocab = task_profiles[idx % len(task_profiles)]
+        base_similarity = _resolve_base_similarity(task_vocab, task_pkl, 0.72)
         users.append(
             UserBusinessItem(
                 user_id="user-{0}".format(idx + 1),
-                tenant_id=config.tenant_id,
                 modality="text",
                 requirement_type=req_type,
-                domain_type=domain,
+                domain_type="generic",
                 payload_symbols=RANDOM.randint(8, 18),
                 distance_m=RANDOM.uniform(1500.0, 4000.0),
-                base_similarity=DOMAIN_BASE_SIMILARITY.get(domain, 0.68),
+                base_similarity=base_similarity,
+                task_pkl=task_pkl,
+                task_vocab=task_vocab,
             )
         )
     return users
@@ -140,20 +164,20 @@ def build_business_config(config: BusinessConfig) -> BusinessConfigResponse:
         normalized_users.append(
             UserBusinessItem(
                 user_id=user.user_id,
-                tenant_id=user.tenant_id or config.tenant_id,
                 modality="text",
                 requirement_type=user.requirement_type,
                 domain_type=user.domain_type,
                 payload_symbols=user.payload_symbols,
                 distance_m=user.distance_m,
-                base_similarity=user.base_similarity,
+                base_similarity=_resolve_base_similarity(user.task_vocab, user.task_pkl, user.base_similarity),
+                task_pkl=user.task_pkl,
+                task_vocab=user.task_vocab,
             )
         )
 
     summary = {
         "user_count": len(normalized_users),
         "modality": "text",
-        "tenant_id": config.tenant_id,
         "high_fidelity_count": sum(1 for user in normalized_users if user.requirement_type == "high_fidelity"),
         "low_latency_count": sum(1 for user in normalized_users if user.requirement_type == "low_latency"),
     }
@@ -161,7 +185,7 @@ def build_business_config(config: BusinessConfig) -> BusinessConfigResponse:
 
 
 def build_network_config(network: NetworkConfig) -> NetworkConfigResponse:
-    profile = CHANNEL_SCENARIOS.get(network.channel_scenario, CHANNEL_SCENARIOS["factory_indoor"])
+    profile = CHANNEL_SCENARIOS.get(network.channel_scenario, CHANNEL_SCENARIOS[DEFAULT_CHANNEL_SCENARIO])
     normalized = {
         "cpu_capacity": float(network.cpu_capacity),
         "compute_energy_threshold": float(network.compute_energy_threshold),

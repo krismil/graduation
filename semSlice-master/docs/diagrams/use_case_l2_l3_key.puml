@@ -1,0 +1,167 @@
+﻿@startuml
+left to right direction
+
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName Microsoft YaHei
+skinparam shadowing false
+skinparam roundcorner 8
+skinparam packageStyle rectangle
+skinparam ArrowColor #4A4A4A
+skinparam ArrowThickness 1
+
+skinparam actor {
+  BorderColor #2F5D8A
+  FontColor #1F2D3D
+}
+
+skinparam usecase {
+  BorderColor #4A5D73
+  BackgroundColor #EEF3F8
+  FontColor #1F2D3D
+}
+
+actor "管理员" as Admin
+actor "租户用户" as Tenant
+
+rectangle "语义通信切片系统（二级/三级关键用例展开）" as SYS #F5F5F5 {
+
+  package "模块S：语义通信模块（一级）" as MS #F8FBFF {
+    usecase "S1 语义参数输入" as S1
+    usecase "S2 信道场景建模" as S2
+    usecase "S3 语义指标计算" as S3
+    usecase "S4 语义结果输出" as S4
+
+    usecase "S3.1 SNR计算" as S31
+    usecase "S3.2 传输时延计算" as S32
+    usecase "S3.3 保真度计算" as S33
+
+    S4 .> S1 : <<include>>
+    S4 .> S2 : <<include>>
+    S4 .> S3 : <<include>>
+    S3 .> S31 : <<include>>
+    S3 .> S32 : <<include>>
+    S3 .> S33 : <<include>>
+  }
+
+  package "模块K：切片构建与分发模块（一级）" as MK #F8FBFF {
+    usecase "K1 知识库配置" as K1
+    usecase "K2 编解码器配置" as K2
+    usecase "K3 切片实例构建" as K3
+    usecase "K4 切片分发" as K4
+
+    K3 .> K1 : <<include>>
+    K3 .> K2 : <<include>>
+    K4 .> K3 : <<include>>
+  }
+
+  package "模块A：认证与权限模块（一级）" as M1 #F8FBFF {
+    usecase "A1 用户认证（登录/登出）" as A1
+    usecase "A2 会话管理" as A2
+    usecase "A3 角色权限校验" as A3
+
+    usecase "A1.1 账号口令校验" as A11
+    usecase "A1.2 Token签发" as A12
+    usecase "A2.1 Token有效期校验" as A21
+    usecase "A2.2 会话失效与注销" as A22
+    usecase "A3.1 管理员接口鉴权" as A31
+    usecase "A3.2 普通用户接口鉴权" as A32
+
+    A1 .> A11 : <<include>>
+    A1 .> A12 : <<include>>
+    A2 .> A21 : <<include>>
+    A2 .> A22 : <<include>>
+    A3 .> A31 : <<include>>
+    A3 .> A32 : <<include>>
+  }
+
+  package "模块B：切片与业务适配模块（一级）" as M2 #F8FBFF {
+    usecase "B1 业务画像构建" as B1
+    usecase "B2 适配策略选择" as B2
+    usecase "B3 适配评分计算" as B3
+    usecase "B4 最优切片匹配输出" as B4
+
+    usecase "B3.1 领域匹配分" as B31
+    usecase "B3.2 知识等级匹配分" as B32
+    usecase "B3.3 时延/保真偏好加权" as B33
+
+    B4 .> B1 : <<include>>
+    B4 .> B2 : <<include>>
+    B4 .> B3 : <<include>>
+    B3 .> B31 : <<include>>
+    B3 .> B32 : <<include>>
+    B3 .> B33 : <<include>>
+  }
+
+  package "模块C：资源管理与编排模块（一级）" as M3 #F8FBFF {
+    usecase "C1 资源池建模" as C1
+    usecase "C2 分配算法选择" as C2
+    usecase "C3 用户级资源分配" as C3
+    usecase "C4 约束校验与修正" as C4
+    usecase "C5 分配时间线输出" as C5
+
+    usecase "C2.1 SemSlice策略" as C21
+    usecase "C2.2 NetSlice策略" as C22
+    usecase "C2.3 NoSlice策略" as C23
+
+    usecase "C4.1 带宽约束校验" as C41
+    usecase "C4.2 功率约束校验" as C42
+    usecase "C4.3 算力/能耗约束校验" as C43
+
+    C3 .> C1 : <<include>>
+    C3 .> C2 : <<include>>
+    C3 .> C4 : <<include>>
+    C3 .> C5 : <<include>>
+
+    C2 .> C21 : <<extend>>
+    C2 .> C22 : <<extend>>
+    C2 .> C23 : <<extend>>
+
+    C4 .> C41 : <<include>>
+    C4 .> C42 : <<include>>
+    C4 .> C43 : <<include>>
+  }
+
+  package "模块D：性能评估与分析模块（一级）" as M4 #F8FBFF {
+    usecase "D1 用户级指标计算" as D1
+    usecase "D2 系统级指标聚合" as D2
+    usecase "D3 可视化图表生成" as D3
+    usecase "D4 策略对比分析" as D4
+
+    usecase "D1.1 保真度计算" as D11
+    usecase "D1.2 时延计算" as D12
+    usecase "D1.3 SNR计算" as D13
+    usecase "D1.4 通过性判定" as D14
+
+    D1 .> D11 : <<include>>
+    D1 .> D12 : <<include>>
+    D1 .> D13 : <<include>>
+    D1 .> D14 : <<include>>
+
+    D2 .> D1 : <<include>>
+    D3 .> D2 : <<include>>
+    D4 .> D2 : <<include>>
+  }
+}
+
+Admin --> A1
+Admin --> A2
+Admin --> A3
+Admin --> K4
+Admin --> B4
+Admin --> C3
+Admin --> D4
+
+Tenant --> A1
+Tenant --> A2
+Tenant --> S4
+Tenant --> B4
+Tenant --> C3
+Tenant --> D1
+Tenant --> D2
+
+D1 .> C3 : <<include>>
+C3 .> B4 : <<include>>
+B4 .> A3 : <<include>>
+B4 .> K4 : <<include>>
+K4 .> S4 : <<include>>
+@enduml

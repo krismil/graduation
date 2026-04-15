@@ -14,15 +14,15 @@
       <p>未登录不可进入业务页面</p>
       <div class="form-grid">
         <div class="form-row"><label>后端地址</label><input id="apiBase" value="http://127.0.0.1:8000/api/v1" /></div>
-        <div class="form-row"><label>系统类型</label><select id="systemType"><option value="tenant">租户系统</option><option value="admin">管理员系统</option></select></div>
-        <div class="form-row"><label>用户名</label><input id="username" value="tenant1" /></div>
-        <div class="form-row"><label>密码</label><input id="password" type="password" value="tenant123" /></div>
+        <div class="form-row"><label>系统类型</label><select id="systemType"><option value="user">用户系统</option><option value="admin">管理员系统</option></select></div>
+        <div class="form-row"><label>用户名</label><input id="username" value="user1" /></div>
+        <div class="form-row"><label>密码</label><input id="password" type="password" value="user123" /></div>
       </div>
       <div class="actions">
         <button id="loginBtn">登录</button>
       </div>
       <div id="loginStatus" class="status">未登录</div>
-      <div class="hint">管理员：admin/admin123；租户：tenant1~tenant99（统一密码 tenant123）</div>
+      <div class="hint">管理员：admin/admin123；普通用户：user1、user2（统一密码 user123）</div>
     </div>
   </div>
 
@@ -44,22 +44,22 @@
           <h3>切片配置</h3>
           <div class="form-grid">
             <div class="form-row"><label>切片数</label><input id="sliceCount" type="number" min="1" value="3" /></div>
-            <div class="form-row"><label>切片命名</label><input id="sliceNames" value="animal-slice,music-slice,sports-slice" /></div>
+            <div class="form-row"><label>切片命名</label><input id="sliceNames" value="slice-en,slice-en90,slice-en80" /></div>
             <div class="form-row"><label>编解码器数</label><input id="codecCount" type="number" min="1" value="3" /></div>
             <div class="form-row"><label>编解码器类型</label><select id="codecModality"><option value="text">text</option></select></div>
           </div>
           <div class="form-row wide"><label>知识库配置</label><textarea id="kbJson" rows="7">[
-  {"kb_id":"kb-animal","kb_type":"animal","knowledge_level":0.92},
-  {"kb_id":"kb-music","kb_type":"music","knowledge_level":0.88},
-  {"kb_id":"kb-sports","kb_type":"sports","knowledge_level":0.86}
+  {"kb_id":"kb-vocab-en","kb_type":"vocab_en","knowledge_level":1.0},
+  {"kb_id":"kb-vocab-en90","kb_type":"vocab_en90","knowledge_level":0.9},
+  {"kb_id":"kb-vocab-en80","kb_type":"vocab_en80","knowledge_level":0.8}
 ]</textarea></div>
           <div id="adminSliceStatus" class="status">请完成切片配置后发布</div>
         </section>
 
         <section class="panel queue-panel area-metric">
-          <h3>租户实时任务队列</h3>
+          <h3>用户实时任务队列</h3>
           <div id="adminMetricQueue" class="scroll-x"></div>
-          <div id="adminRealtimeStatus" class="status">等待租户提交任务</div>
+          <div id="adminRealtimeStatus" class="status">等待用户提交任务</div>
         </section>
 
         <section class="panel area-network">
@@ -69,26 +69,24 @@
             <div class="form-row"><label>能耗阈值</label><input id="energyThreshold" type="number" step="0.1" value="650" /></div>
             <div class="form-row"><label>总带宽</label><input id="totalBandwidth" type="number" step="0.01" value="2.4" /></div>
             <div class="form-row"><label>总功率</label><input id="totalPower" type="number" step="0.01" value="1.2" /></div>
-            <div class="form-row"><label>信道场景</label><select id="channelScenario"><option value="factory_indoor">工厂室内</option><option value="satellite_link">卫星链路</option><option value="urban_macro">城市宏站</option><option value="snr_m6">SNR -6 dB（验证）</option><option value="snr_m4">SNR -4 dB（验证）</option><option value="snr_m2">SNR -2 dB（验证）</option><option value="snr_0">SNR 0 dB（验证）</option><option value="snr_2">SNR 2 dB（验证）</option><option value="snr_4">SNR 4 dB（验证）</option><option value="snr_6">SNR 6 dB（验证）</option><option value="snr_8">SNR 8 dB（验证）</option><option value="snr_10">SNR 10 dB（验证）</option><option value="snr_12">SNR 12 dB（验证）</option></select></div>
+            <div class="form-row"><label>信道场景</label><select id="channelScenario"><option value="snr_m6">SNR -6 dB</option><option value="snr_m4">SNR -4 dB</option><option value="snr_m2">SNR -2 dB</option><option value="snr_0">SNR 0 dB</option><option value="snr_2">SNR 2 dB</option><option value="snr_4">SNR 4 dB</option><option value="snr_6">SNR 6 dB</option><option value="snr_8">SNR 8 dB</option><option value="snr_10">SNR 10 dB</option><option value="snr_12">SNR 12 dB</option></select></div>
             <div class="form-row"><label>运行策略</label><select id="adminRunAlgorithm"><option value="semslice">语义切片</option><option value="netslice">网络切片</option><option value="noslice">无切片</option></select></div>
           </div>
           <div class="actions">
             <button id="adminPublishBtn">发布网络与切片配置</button>
-            <button id="adminRunQueuedBtn" class="secondary-btn">运行已提交任务</button>
           </div>
           <div id="adminConfigStatus" class="status">待发布</div>
-          <div id="adminRunStatus" class="status">待运行</div>
         </section>
 
         <section class="panel area-tasktable">
-          <h3>租户任务明细（实时）</h3>
+          <h3>用户任务明细（实时）</h3>
           <div id="adminTaskTable"></div>
         </section>
       </div>
       <section class="panel admin-compare-panel">
         <h3>三策略三指标对比（当前运行数据）</h3>
         <div id="adminUnifiedCompare" class="unified-compare-chart"></div>
-        <div id="adminUnifiedCompareStatus" class="status">待生成：请先由管理员运行任务</div>
+        <div id="adminUnifiedCompareStatus" class="status">待生成：请先产生任务运行数据</div>
       </section>
     </main>
 
@@ -98,7 +96,6 @@
           <h3>任务提交</h3>
           <div class="form-grid">
             <div class="form-row"><label>任务需求</label><select id="tenantReq"><option value="high_fidelity">高保真</option><option value="low_latency">低时延</option></select></div>
-            <div class="form-row"><label>任务领域</label><select id="tenantDomain"><option value="animal">动物</option><option value="music">音乐</option><option value="sports">体育</option></select></div>
             <div class="form-row"><label>符号长度</label><input id="tenantPayload" type="number" min="1" value="12" /></div>
             <div class="form-row"><label>传输距离</label><input id="tenantDistance" type="number" min="100" step="10" value="2600" /></div>
           </div>
@@ -130,6 +127,6 @@
     </main>
   </div>
 
-  <script src="./app.js"></script>
+  <script src="./app.js?v=20260413-2"></script>
 </body>
 </html>

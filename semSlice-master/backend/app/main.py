@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router as api_router
+from app.store.database import init_db
+from app.store.repository import seed_default_users
 
 
 app = FastAPI(
@@ -19,6 +21,12 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix="/api/v1")
+
+
+@app.on_event("startup")
+def startup() -> None:
+    init_db()
+    seed_default_users()
 
 
 @app.get("/health")

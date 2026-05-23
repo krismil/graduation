@@ -1,3 +1,10 @@
 semSlice-master/DeepSC-master/cased_L-12_H-768_A-12
 semSlice-master/DeepSC-master/checkpoint
 semSlice-master/DeepSC-master/records
+semSlice-master/DeepSC-master/deepsc-AWGN-en80%_layer3
+semSlice-master/DeepSC-master/deepsc-AWGN-en90%_layer3
+semSlice-master/DeepSC-master/deepsc-AWGN-enorigin_layer3
+semSlice-master/DeepSC-master/test_data_en.pkl
+semSlice-master/DeepSC-master/test_data-en80%.pkl
+semSlice-master/DeepSC-master/test_data-en90%.pkl
+

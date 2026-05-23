@@ -7,6 +7,7 @@ from typing import Iterator
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 DB_PATH = os.path.join(DATA_DIR, "semslice.db")
+SCHEMA_VERSION = 8
 
 
 SCHEMA_SQL = """
@@ -51,17 +52,19 @@ CREATE TABLE IF NOT EXISTS task_item (
     base_similarity REAL NOT NULL,
     task_pkl TEXT,
     task_vocab TEXT,
+    sample_index INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     FOREIGN KEY(submission_id) REFERENCES task_submission(id)
 );
 
 CREATE TABLE IF NOT EXISTS network_config (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    cpu_capacity REAL NOT NULL,
-    compute_energy_threshold REAL NOT NULL,
     total_bandwidth REAL NOT NULL,
     total_power REAL NOT NULL,
-    channel_scenario TEXT NOT NULL,
+    target_snr_db REAL NOT NULL DEFAULT 6.0,
+    node_count INTEGER NOT NULL DEFAULT 5,
+    base_station_count INTEGER NOT NULL DEFAULT 1,
+    channel_scenario TEXT,
     is_active INTEGER NOT NULL DEFAULT 0,
     created_by_user_id INTEGER,
     created_at TEXT NOT NULL,
@@ -91,7 +94,7 @@ CREATE TABLE IF NOT EXISTS workflow_run (
     run_status TEXT NOT NULL,
     avg_fidelity REAL,
     avg_delay_ms REAL,
-    avg_energy REAL,
+    avg_s_se REAL,
     started_at TEXT NOT NULL,
     finished_at TEXT,
     FOREIGN KEY(submission_id) REFERENCES task_submission(id),
@@ -119,8 +122,6 @@ CREATE TABLE IF NOT EXISTS allocation_result (
     slice_id TEXT NOT NULL,
     bandwidth REAL NOT NULL,
     power REAL NOT NULL,
-    compute REAL NOT NULL,
-    energy_cost REAL NOT NULL,
     FOREIGN KEY(run_id) REFERENCES workflow_run(id),
     FOREIGN KEY(task_item_id) REFERENCES task_item(id)
 );
@@ -135,6 +136,19 @@ CREATE TABLE IF NOT EXISTS performance_result (
     snr_db REAL NOT NULL,
     similarity_score REAL NOT NULL,
     knowledge_factor REAL NOT NULL,
+    s_se REAL NOT NULL DEFAULT 0,
+    pass INTEGER NOT NULL DEFAULT 0,
+    source_text TEXT,
+    encoded_signal_shape TEXT,
+    encoded_signal_preview TEXT,
+    decoded_text TEXT,
+    token_match_rate REAL,
+    sample_index INTEGER NOT NULL DEFAULT 0,
+    task_pkl TEXT,
+    task_vocab TEXT,
+    model_profile TEXT,
+    checkpoint_name TEXT,
+    decode_error TEXT,
     FOREIGN KEY(run_id) REFERENCES workflow_run(id),
     FOREIGN KEY(task_item_id) REFERENCES task_item(id)
 );
@@ -189,6 +203,20 @@ def connection_scope() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _column_exists(conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
+    rows = conn.execute("PRAGMA table_info({0})".format(table_name)).fetchall()
+    return any(str(row["name"]) == column_name for row in rows)
+
+
 def init_db() -> None:
     with connection_scope() as conn:
         conn.executescript(SCHEMA_SQL)
+        if not _column_exists(conn, "performance_result", "encoded_signal_shape"):
+            conn.execute("ALTER TABLE performance_result ADD COLUMN encoded_signal_shape TEXT")
+        if not _column_exists(conn, "performance_result", "encoded_signal_preview"):
+            conn.execute("ALTER TABLE performance_result ADD COLUMN encoded_signal_preview TEXT")
+        if not _column_exists(conn, "network_config", "node_count"):
+            conn.execute("ALTER TABLE network_config ADD COLUMN node_count INTEGER NOT NULL DEFAULT 5")
+        if not _column_exists(conn, "network_config", "base_station_count"):
+            conn.execute("ALTER TABLE network_config ADD COLUMN base_station_count INTEGER NOT NULL DEFAULT 1")
+        conn.execute("PRAGMA user_version = {0}".format(SCHEMA_VERSION))

@@ -2,9 +2,14 @@ import random
 from typing import Dict, List
 
 from app.models.schemas import AdaptationRequest, AdaptationResponse, AdaptationRow, SliceInstance, UserBusinessItem
+from app.services.deepsc_runtime_service import (
+    profile_for_slice,
+    resolve_task_files,
+    semantic_slice_for_user,
+)
 
 
-RANDOM = random.Random(2026)
+RANDOM_SEED = 2026
 _VOCAB_LEVEL = {"en": 1.0, "en90": 0.9, "en80": 0.8}
 
 
@@ -24,15 +29,23 @@ def _infer_vocab_tag_from_text(text: str) -> str:
 
 
 def _user_vocab_tag(user: UserBusinessItem) -> str:
-    for value in [user.task_vocab, user.task_pkl, user.domain_type]:
-        if value:
-            return _infer_vocab_tag_from_text(value)
-    return "en"
+    try:
+        profile, _, _ = resolve_task_files(user)
+        return "en" if profile == "full" else profile
+    except Exception:
+        for value in [user.task_vocab, user.task_pkl, user.domain_type]:
+            if value:
+                return _infer_vocab_tag_from_text(value)
+        return "en"
 
 
 def _slice_vocab_tag(slice_item: SliceInstance) -> str:
-    probe = " ".join([slice_item.kb_type, slice_item.kb_id, slice_item.slice_name])
-    return _infer_vocab_tag_from_text(probe)
+    try:
+        profile = profile_for_slice(slice_item)
+        return "en" if profile == "full" else profile
+    except Exception:
+        probe = " ".join([slice_item.kb_type, slice_item.kb_id, slice_item.slice_name])
+        return _infer_vocab_tag_from_text(probe)
 
 
 def _similarity(user: UserBusinessItem, slice_item: SliceInstance) -> float:
@@ -57,6 +70,11 @@ def _similarity(user: UserBusinessItem, slice_item: SliceInstance) -> float:
 
 
 def _choose_slice_by_vocab(user: UserBusinessItem, slices: List[SliceInstance]) -> SliceInstance:
+    try:
+        selected, _ = semantic_slice_for_user(user, slices)
+        return selected
+    except Exception:
+        pass
     scored = sorted(
         ((slice_item, _similarity(user, slice_item)) for slice_item in slices),
         key=lambda item: (item[1], item[0].knowledge_level),
@@ -65,23 +83,33 @@ def _choose_slice_by_vocab(user: UserBusinessItem, slices: List[SliceInstance]) 
     return scored[0][0]
 
 
-def _random_slice_map(users: List[UserBusinessItem], slices: List[SliceInstance]) -> Dict[str, SliceInstance]:
+def _stable_seed(method: str, users: List[UserBusinessItem], slices: List[SliceInstance]) -> int:
+    seed_text = "|".join(
+        [method]
+        + [str(user.user_id) for user in users]
+        + [str(slice_item.slice_id) for slice_item in slices]
+    )
+    return RANDOM_SEED + sum((idx + 1) * ord(char) for idx, char in enumerate(seed_text))
+
+
+def _random_slice_map(
+    users: List[UserBusinessItem],
+    slices: List[SliceInstance],
+    method: str,
+) -> Dict[str, SliceInstance]:
     if not users or not slices:
         return {}
 
-    chosen: List[SliceInstance] = []
+    rng = random.Random(_stable_seed(method, users, slices))
     if len(users) >= len(slices):
-        chosen.extend(slices)
-        for _ in range(len(users) - len(slices)):
-            chosen.append(slices[RANDOM.randint(0, len(slices) - 1)])
-        RANDOM.shuffle(chosen)
+        chosen = list(slices)
+        while len(chosen) < len(users):
+            chosen.append(slices[rng.randrange(len(slices))])
+        rng.shuffle(chosen)
     else:
-        chosen = RANDOM.sample(slices, len(users))
+        chosen = rng.sample(slices, len(users))
 
-    mapping: Dict[str, SliceInstance] = {}
-    for idx, user in enumerate(users):
-        mapping[user.user_id] = chosen[idx]
-    return mapping
+    return {user.user_id: chosen[idx] for idx, user in enumerate(users)}
 
 
 def adapt_users_to_slices(payload: AdaptationRequest) -> AdaptationResponse:
@@ -89,16 +117,21 @@ def adapt_users_to_slices(payload: AdaptationRequest) -> AdaptationResponse:
         return AdaptationResponse(relations=[])
 
     method = _norm(payload.method)
-    use_random = method in {"random", "netslice", "noslice"}
-    random_map = _random_slice_map(payload.users, payload.slices) if use_random else {}
+    if method in {"random", "no_slice"}:
+        method = "noslice"
+    random_map = _random_slice_map(payload.users, payload.slices, method) if method in {"netslice", "noslice"} else {}
 
     relations = []
     for user in payload.users:
-        if use_random:
+        if method in {"netslice", "noslice"}:
             best_slice = random_map.get(user.user_id, payload.slices[0])
+            score = 0.0
         else:
-            best_slice = _choose_slice_by_vocab(user, payload.slices)
-        score = _similarity(user, best_slice)
+            try:
+                best_slice, score = semantic_slice_for_user(user, payload.slices)
+            except Exception:
+                best_slice = _choose_slice_by_vocab(user, payload.slices)
+                score = _similarity(user, best_slice)
 
         relations.append(
             AdaptationRow(

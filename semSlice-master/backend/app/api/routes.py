@@ -45,7 +45,7 @@ from app.services.auth_service import (
 from app.services.evaluation_service import evaluate, evaluate_performance
 from app.services.legacy_adapter import compare_legacy_strategies
 from app.services.orchestration_service import allocate_user_resources, orchestrate_resources
-from app.services.semantic_service import DEFAULT_CHANNEL_SCENARIO, build_business_config, build_network_config, process_services
+from app.services.semantic_service import DEFAULT_TARGET_SNR_DB, build_business_config, build_network_config, process_services
 from app.services.slicing_service import build_and_distribute, build_slice_config
 from app.store.repository import (
     active_network_response,
@@ -72,22 +72,11 @@ router = APIRouter()
 CURRENT_RUNTIME = {"allocation_algorithm": "semslice"}
 STRATEGY_KEYS = ("semslice", "netslice", "noslice")
 STRATEGY_NAME_MAP = {
-    "semslice": "语义切片",
-    "netslice": "网络切片",
-    "noslice": "无切片",
+    "semslice": "语义切片（PSO 20粒子/50迭代）",
+    "netslice": "网络切片（随机模型+PSO 20粒子/50迭代）",
+    "noslice": "无切片（随机模型+目标SNR均分）",
 }
-SNR_SCENARIOS = [
-    ("snr_m6", -6.0),
-    ("snr_m4", -4.0),
-    ("snr_m2", -2.0),
-    ("snr_0", 0.0),
-    ("snr_2", 2.0),
-    ("snr_4", 4.0),
-    ("snr_6", 6.0),
-    ("snr_8", 8.0),
-    ("snr_10", 10.0),
-    ("snr_12", 12.0),
-]
+TARGET_SNR_POINTS = [-6.0, -4.0, -2.0, 0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0]
 
 
 def _model_to_dict(model):
@@ -125,13 +114,13 @@ def _normalize_allocation_algorithm(raw: str) -> str:
 
 
 def _resolve_adaptation_method(raw_method: str, allocation_algorithm: str) -> str:
-    method = str(raw_method or "").strip().lower()
+    _ = raw_method
     strategy = _normalize_allocation_algorithm(allocation_algorithm)
-    if method in {"random", "netslice", "noslice"}:
-        return "random"
-    if method in {"vocab", "semslice"}:
-        return "vocab"
-    return "vocab" if strategy == "semslice" else "random"
+    if strategy == "netslice":
+        return "netslice"
+    if strategy == "noslice":
+        return "noslice"
+    return "vocab"
 
 
 def _ensure_runtime_configs() -> Tuple[int, NetworkConfig, NetworkConfigResponse, int, SliceConfigRequest, SliceConfigResponse]:
@@ -315,11 +304,11 @@ def get_workflow_example() -> dict:
             "default_domain_type": "generic",
         },
         "network": {
-            "cpu_capacity": 120,
-            "compute_energy_threshold": 650,
-            "total_bandwidth": 2.4,
-            "total_power": 1.2,
-            "channel_scenario": DEFAULT_CHANNEL_SCENARIO,
+            "total_bandwidth": 2.0,
+            "total_power": 1.0,
+            "target_snr_db": DEFAULT_TARGET_SNR_DB,
+            "node_count": 5,
+            "base_station_count": 1,
         },
         "slicing": {
             "slice_count": 3,
@@ -504,13 +493,13 @@ def system_admin_ss_snr_sweep(payload: dict, user: Dict[str, object] = Depends(g
     adaptation_method = str(payload.get("adaptation_method", "similarity"))
 
     points: List[dict] = []
-    for scenario_key, snr_point in SNR_SCENARIOS:
+    for snr_point in TARGET_SNR_POINTS:
         scenario_network = NetworkConfig(
-            cpu_capacity=active_network.cpu_capacity,
-            compute_energy_threshold=active_network.compute_energy_threshold,
             total_bandwidth=active_network.total_bandwidth,
             total_power=active_network.total_power,
-            channel_scenario=scenario_key,
+            target_snr_db=snr_point,
+            node_count=active_network.node_count,
+            base_station_count=active_network.base_station_count,
         )
         row = {"snr_db": snr_point}
         for strategy_key in STRATEGY_KEYS:

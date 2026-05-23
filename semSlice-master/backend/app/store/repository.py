@@ -32,6 +32,7 @@ DEFAULT_USERS = (
 
 PASS_SIM_THRESHOLD = 0.60
 PASS_DELAY_THRESHOLD_MS = 130.0
+SLICE_COUNT = 3
 
 
 def now_iso() -> str:
@@ -172,17 +173,18 @@ def save_network_config(config: NetworkConfig, created_by_user_id: Optional[int]
         cursor = conn.execute(
             """
             INSERT INTO network_config (
-                cpu_capacity, compute_energy_threshold, total_bandwidth, total_power,
-                channel_scenario, is_active, created_by_user_id, created_at
+                total_bandwidth, total_power, target_snr_db, node_count, base_station_count, channel_scenario,
+                is_active, created_by_user_id, created_at
             )
-            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
             """,
             (
-                float(config.cpu_capacity),
-                float(config.compute_energy_threshold),
                 float(config.total_bandwidth),
                 float(config.total_power),
-                str(config.channel_scenario),
+                float(config.target_snr_db),
+                int(config.node_count),
+                int(config.base_station_count),
+                str(config.channel_scenario or ""),
                 int(created_by_user_id) if created_by_user_id is not None else None,
                 created_at,
             ),
@@ -227,8 +229,8 @@ def get_active_network_record() -> Optional[Dict[str, object]]:
     with connection_scope() as conn:
         row = conn.execute(
             """
-            SELECT id, cpu_capacity, compute_energy_threshold, total_bandwidth, total_power,
-                   channel_scenario, is_active, created_by_user_id, created_at
+            SELECT id, total_bandwidth, total_power, target_snr_db, node_count, base_station_count, channel_scenario,
+                   is_active, created_by_user_id, created_at
             FROM network_config
             WHERE is_active = 1
             ORDER BY id DESC
@@ -255,11 +257,12 @@ def get_active_slice_record() -> Optional[Dict[str, object]]:
 
 def network_model_from_record(record: Dict[str, object]) -> NetworkConfig:
     return NetworkConfig(
-        cpu_capacity=float(record["cpu_capacity"]),
-        compute_energy_threshold=float(record["compute_energy_threshold"]),
         total_bandwidth=float(record["total_bandwidth"]),
         total_power=float(record["total_power"]),
-        channel_scenario=str(record["channel_scenario"]),
+        target_snr_db=float(record.get("target_snr_db") or 6.0),
+        node_count=int(record.get("node_count") or 5),
+        base_station_count=int(record.get("base_station_count") or 1),
+        channel_scenario=str(record.get("channel_scenario") or ""),
     )
 
 
@@ -310,9 +313,9 @@ def create_task_submission(owner_user_id: int, business_output: BusinessConfigRe
                 """
                 INSERT INTO task_item (
                     submission_id, biz_user_code, requirement_type, domain_type,
-                    payload_symbols, distance_m, base_similarity, task_pkl, task_vocab, created_at
+                    payload_symbols, distance_m, base_similarity, task_pkl, task_vocab, sample_index, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     submission_id,
@@ -324,6 +327,7 @@ def create_task_submission(owner_user_id: int, business_output: BusinessConfigRe
                     float(item.base_similarity),
                     item.task_pkl,
                     item.task_vocab,
+                    int(getattr(item, "sample_index", 0)),
                     created_at,
                 ),
             )
@@ -375,14 +379,14 @@ def complete_workflow_run(run_id: int, performance_output: PerformanceEvaluateRe
         conn.execute(
             """
             UPDATE workflow_run
-            SET run_status = ?, avg_fidelity = ?, avg_delay_ms = ?, avg_energy = ?, finished_at = ?
+            SET run_status = ?, avg_fidelity = ?, avg_delay_ms = ?, avg_s_se = ?, finished_at = ?
             WHERE id = ?
             """,
             (
                 str(run_status),
                 float(core.get("avg_fidelity", 0.0)),
                 float(core.get("avg_delay_ms", 0.0)),
-                float(core.get("avg_energy", 0.0)),
+                float(core.get("avg_s_se", 0.0)),
                 now_iso(),
                 int(run_id),
             ),
@@ -430,9 +434,9 @@ def persist_run_results(
             conn.execute(
                 """
                 INSERT INTO allocation_result (
-                    run_id, task_item_id, slice_id, bandwidth, power, compute, energy_cost
+                    run_id, task_item_id, slice_id, bandwidth, power
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 (
                     int(run_id),
@@ -440,8 +444,6 @@ def persist_run_results(
                     str(row.slice_id),
                     float(row.bandwidth),
                     float(row.power),
-                    float(row.compute),
-                    float(row.energy_cost),
                 ),
             )
 
@@ -453,9 +455,12 @@ def persist_run_results(
                 """
                 INSERT INTO performance_result (
                     run_id, task_item_id, slice_id, fidelity, delay_ms,
-                    snr_db, similarity_score, knowledge_factor
+                    snr_db, similarity_score, knowledge_factor, s_se, pass,
+                    source_text, encoded_signal_shape, encoded_signal_preview, decoded_text, token_match_rate,
+                    sample_index, task_pkl, task_vocab, model_profile,
+                    checkpoint_name, decode_error
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(run_id),
@@ -466,6 +471,19 @@ def persist_run_results(
                     float(row.get("snr_db", 0.0)),
                     float(row.get("similarity_score", 0.0)),
                     float(row.get("knowledge_factor", 0.0)),
+                    float(row.get("s_se", 0.0)),
+                    1 if row.get("pass", False) else 0,
+                    str(row.get("source_text", "")),
+                    str(row.get("encoded_signal_shape", "")),
+                    str(row.get("encoded_signal_preview", "")),
+                    str(row.get("decoded_text", "")),
+                    float(row.get("token_match_rate", row.get("fidelity", 0.0))),
+                    int(row.get("sample_index", 0) or 0),
+                    str(row.get("task_pkl", "")),
+                    str(row.get("task_vocab", "")),
+                    str(row.get("model_profile", "")),
+                    str(row.get("checkpoint_name", "")),
+                    str(row.get("decode_error", "")),
                 ),
             )
 
@@ -477,7 +495,9 @@ def save_strategy_compare_summary(submission_id: int, strategy: str, performance
     avg_s_se = 0.0
     if user_metrics:
         avg_ss = float(sum(float(item.get("fidelity", 0.0)) for item in user_metrics) / len(user_metrics))
-        avg_s_se = float(sum(float(item.get("fidelity", 0.0)) / 10.0 for item in user_metrics) / len(user_metrics))
+        avg_s_se = float(core.get("avg_s_se", 0.0))
+        if avg_s_se == 0.0:
+            avg_s_se = float(sum(float(item.get("s_se", 0.0)) for item in user_metrics) / len(user_metrics))
 
     with connection_scope() as conn:
         conn.execute(
@@ -524,7 +544,7 @@ def _load_submission_rows(submission_id: int) -> Tuple[Optional[Dict[str, object
         task_rows = conn.execute(
             """
             SELECT id, submission_id, biz_user_code, requirement_type, domain_type,
-                   payload_symbols, distance_m, base_similarity, task_pkl, task_vocab, created_at
+                   payload_symbols, distance_m, base_similarity, task_pkl, task_vocab, sample_index, created_at
             FROM task_item
             WHERE submission_id = ?
             ORDER BY id ASC
@@ -539,7 +559,7 @@ def _load_run_rows(submission_id: int) -> List[Dict[str, object]]:
         rows = conn.execute(
             """
             SELECT id, submission_id, network_config_id, slice_config_id, allocation_algorithm,
-                   adaptation_method, run_status, avg_fidelity, avg_delay_ms, avg_energy,
+                   adaptation_method, run_status, avg_fidelity, avg_delay_ms, avg_s_se,
                    started_at, finished_at
             FROM workflow_run
             WHERE submission_id = ?
@@ -562,6 +582,7 @@ def _build_business_output_from_task_rows(task_rows: List[Dict[str, object]]) ->
             base_similarity=float(row["base_similarity"]),
             task_pkl=row.get("task_pkl"),
             task_vocab=row.get("task_vocab"),
+            sample_index=int(row.get("sample_index") or 0),
         )
         for row in task_rows
     ]
@@ -586,43 +607,63 @@ def _derived_pass(requirement_type: str, fidelity: float, delay_ms: float) -> bo
 def _build_allocation_metrics(
     allocations: List[UserResourceAllocation],
     network: NetworkConfig,
+    allocation_algorithm: str = "semslice",
 ) -> Tuple[Dict[str, float], Dict[str, float], List[Dict[str, float]]]:
     used_bw = 0.0
     used_power = 0.0
-    used_compute = 0.0
-    used_energy = 0.0
     timeline: List[Dict[str, float]] = []
+    seen_slices = set()
+
+    if str(allocation_algorithm or "").strip().lower() == "noslice":
+        used_bw = max((float(item.bandwidth) for item in allocations), default=0.0)
+        used_power = max((float(item.power) for item in allocations), default=0.0)
+        if allocations:
+            used_bw = min(float(network.total_bandwidth), used_bw * SLICE_COUNT)
+            used_power = min(float(network.total_power), used_power * SLICE_COUNT)
+        for step, _ in enumerate(allocations):
+            timeline.append(
+                {
+                    "step": float(step + 1),
+                    "used_bandwidth": round(used_bw, 5),
+                    "used_power": round(used_power, 5),
+                    "remaining_bandwidth": round(max(0.0, float(network.total_bandwidth) - used_bw), 5),
+                    "remaining_power": round(max(0.0, float(network.total_power) - used_power), 5),
+                }
+            )
+        return (
+            {
+                "bandwidth": round(used_bw, 5),
+                "power": round(used_power, 5),
+            },
+            {
+                "bandwidth": round(max(0.0, float(network.total_bandwidth) - used_bw), 5),
+                "power": round(max(0.0, float(network.total_power) - used_power), 5),
+            },
+            timeline,
+        )
 
     for step, item in enumerate(allocations):
-        used_bw += float(item.bandwidth)
-        used_power += float(item.power)
-        used_compute += float(item.compute)
-        used_energy += float(item.energy_cost)
+        if item.slice_id not in seen_slices:
+            used_bw += float(item.bandwidth)
+            used_power += float(item.power)
+            seen_slices.add(item.slice_id)
         timeline.append(
             {
                 "step": float(step + 1),
                 "used_bandwidth": round(used_bw, 5),
                 "used_power": round(used_power, 5),
-                "used_compute": round(used_compute, 5),
-                "used_energy": round(used_energy, 5),
                 "remaining_bandwidth": round(max(0.0, float(network.total_bandwidth) - used_bw), 5),
                 "remaining_power": round(max(0.0, float(network.total_power) - used_power), 5),
-                "remaining_compute": round(max(0.0, float(network.cpu_capacity) - used_compute), 5),
-                "remaining_energy": round(max(0.0, float(network.compute_energy_threshold) - used_energy), 5),
             }
         )
 
     used_resources = {
         "bandwidth": round(used_bw, 5),
         "power": round(used_power, 5),
-        "compute": round(used_compute, 5),
-        "energy": round(used_energy, 5),
     }
     remaining_resources = {
         "bandwidth": round(max(0.0, float(network.total_bandwidth) - used_bw), 5),
         "power": round(max(0.0, float(network.total_power) - used_power), 5),
-        "compute": round(max(0.0, float(network.cpu_capacity) - used_compute), 5),
-        "energy": round(max(0.0, float(network.compute_energy_threshold) - used_energy), 5),
     }
     return used_resources, remaining_resources, timeline
 
@@ -632,7 +673,7 @@ def build_full_system_response(run_id: int) -> Optional[FullSystemResponse]:
         run_row = conn.execute(
             """
             SELECT id, submission_id, network_config_id, slice_config_id, allocation_algorithm,
-                   adaptation_method, run_status, avg_fidelity, avg_delay_ms, avg_energy,
+                   adaptation_method, run_status, avg_fidelity, avg_delay_ms, avg_s_se,
                    started_at, finished_at
             FROM workflow_run
             WHERE id = ?
@@ -650,7 +691,7 @@ def build_full_system_response(run_id: int) -> Optional[FullSystemResponse]:
         task_rows = conn.execute(
             """
             SELECT id, submission_id, biz_user_code, requirement_type, domain_type,
-                   payload_symbols, distance_m, base_similarity, task_pkl, task_vocab, created_at
+                   payload_symbols, distance_m, base_similarity, task_pkl, task_vocab, sample_index, created_at
             FROM task_item
             WHERE submission_id = ?
             ORDER BY id ASC
@@ -659,8 +700,8 @@ def build_full_system_response(run_id: int) -> Optional[FullSystemResponse]:
         ).fetchall()
         network_row = conn.execute(
             """
-            SELECT id, cpu_capacity, compute_energy_threshold, total_bandwidth, total_power,
-                   channel_scenario, is_active, created_by_user_id, created_at
+            SELECT id, total_bandwidth, total_power, target_snr_db, node_count, base_station_count, channel_scenario,
+                   is_active, created_by_user_id, created_at
             FROM network_config
             WHERE id = ?
             """,
@@ -690,8 +731,7 @@ def build_full_system_response(run_id: int) -> Optional[FullSystemResponse]:
         allocation_rows = conn.execute(
             """
             SELECT
-                al.task_item_id, ti.biz_user_code, al.slice_id, al.bandwidth,
-                al.power, al.compute, al.energy_cost
+                al.task_item_id, ti.biz_user_code, al.slice_id, al.bandwidth, al.power
             FROM allocation_result al
             JOIN task_item ti ON ti.id = al.task_item_id
             WHERE al.run_id = ?
@@ -704,8 +744,11 @@ def build_full_system_response(run_id: int) -> Optional[FullSystemResponse]:
             SELECT
                 pr.task_item_id, ti.biz_user_code, ti.domain_type, ti.requirement_type,
                 pr.slice_id, pr.fidelity, pr.delay_ms, pr.snr_db,
-                pr.similarity_score, pr.knowledge_factor,
-                al.bandwidth, al.power, al.compute, al.energy_cost
+                pr.similarity_score, pr.knowledge_factor, pr.s_se, pr.pass,
+                pr.source_text, pr.encoded_signal_shape, pr.encoded_signal_preview, pr.decoded_text, pr.token_match_rate,
+                pr.sample_index, pr.task_pkl, pr.task_vocab,
+                pr.model_profile, pr.checkpoint_name, pr.decode_error,
+                al.bandwidth, al.power
             FROM performance_result pr
             JOIN task_item ti ON ti.id = pr.task_item_id
             LEFT JOIN allocation_result al
@@ -750,12 +793,14 @@ def build_full_system_response(run_id: int) -> Optional[FullSystemResponse]:
             slice_id=str(row["slice_id"]),
             bandwidth=float(row["bandwidth"]),
             power=float(row["power"]),
-            compute=float(row["compute"]),
-            energy_cost=float(row["energy_cost"]),
         )
         for row in allocation_rows
     ]
-    used_resources, remaining_resources, timeline = _build_allocation_metrics(allocation_items, network_config)
+    used_resources, remaining_resources, timeline = _build_allocation_metrics(
+        allocation_items,
+        network_config,
+        str(run_record.get("allocation_algorithm", "semslice")),
+    )
     allocation_output = ResourceAllocationResponseV2(
         allocations=allocation_items,
         used_resources=used_resources,
@@ -778,10 +823,21 @@ def build_full_system_response(run_id: int) -> Optional[FullSystemResponse]:
                 "snr_db": float(row["snr_db"]),
                 "bandwidth": float(row["bandwidth"] or 0.0),
                 "power": float(row["power"] or 0.0),
-                "compute": float(row["compute"] or 0.0),
-                "energy_cost": float(row["energy_cost"] or 0.0),
                 "similarity_score": float(row["similarity_score"]),
                 "knowledge_factor": float(row["knowledge_factor"]),
+                "s_se": float(row["s_se"] or 0.0),
+                "pass": bool(row["pass"]),
+                "source_text": str(row["source_text"] or ""),
+                "encoded_signal_shape": str(row["encoded_signal_shape"] or ""),
+                "encoded_signal_preview": str(row["encoded_signal_preview"] or ""),
+                "decoded_text": str(row["decoded_text"] or ""),
+                "token_match_rate": float(row["token_match_rate"] or fidelity),
+                "sample_index": int(row["sample_index"] or 0),
+                "task_pkl": str(row["task_pkl"] or ""),
+                "task_vocab": str(row["task_vocab"] or ""),
+                "model_profile": str(row["model_profile"] or ""),
+                "checkpoint_name": str(row["checkpoint_name"] or ""),
+                "decode_error": str(row["decode_error"] or ""),
             }
         )
 
@@ -793,8 +849,6 @@ def build_full_system_response(run_id: int) -> Optional[FullSystemResponse]:
                 "label": row["user_id"],
                 "bandwidth": float(row["bandwidth"]),
                 "power": float(row["power"]),
-                "compute": float(row["compute"]),
-                "energy": float(row["energy_cost"]),
             }
             for row in user_metrics
         ],
@@ -803,7 +857,7 @@ def build_full_system_response(run_id: int) -> Optional[FullSystemResponse]:
         core_metrics={
             "avg_fidelity": round(float(run_record.get("avg_fidelity") or 0.0), 4),
             "avg_delay_ms": round(float(run_record.get("avg_delay_ms") or 0.0), 4),
-            "avg_energy": round(float(run_record.get("avg_energy") or 0.0), 4),
+            "avg_s_se": round(float(run_record.get("avg_s_se") or 0.0), 5),
         },
         user_metrics=user_metrics,
         charts=charts,
@@ -883,20 +937,28 @@ def build_task_board(response: FullSystemResponse, allocation_algorithm: str) ->
                 "slice_id": rel.matched_slice_id,
                 "bandwidth": float(getattr(alloc, "bandwidth", 0.0)),
                 "power": float(getattr(alloc, "power", 0.0)),
-                "compute": float(getattr(alloc, "compute", 0.0)),
                 "delay_ms": float(metric.get("delay_ms", 0.0)),
                 "fidelity": float(metric.get("fidelity", 0.0)),
                 "snr_db": float(metric.get("snr_db", 0.0)),
                 "task_pkl": getattr(business_user, "task_pkl", None),
-                "task_vocab": getattr(business_user, "task_vocab", None),
+                "task_vocab": str(metric.get("task_vocab") or getattr(business_user, "task_vocab", None) or ""),
+                "sample_index": getattr(business_user, "sample_index", 0),
+                "source_text": str(metric.get("source_text", "")),
+                "encoded_signal_shape": str(metric.get("encoded_signal_shape", "")),
+                "encoded_signal_preview": str(metric.get("encoded_signal_preview", "")),
+                "decoded_text": str(metric.get("decoded_text", "")),
+                "token_match_rate": float(metric.get("token_match_rate", metric.get("fidelity", 0.0))),
+                "s_se": float(metric.get("s_se", 0.0)),
+                "model_profile": str(metric.get("model_profile", "")),
+                "checkpoint_name": str(metric.get("checkpoint_name", "")),
+                "decode_error": str(metric.get("decode_error", "")),
                 "allocation_algorithm": str(allocation_algorithm),
-                "status": "通过"
-                if _derived_pass(str(metric.get("requirement_type", "")), float(metric.get("fidelity", 0.0)), float(metric.get("delay_ms", 0.0)))
-                else "未通过",
                 "updated_at": now_iso(),
                 "total_bandwidth": float(network.get("total_bandwidth", 0.0)),
                 "total_power": float(network.get("total_power", 0.0)),
-                "total_compute": float(network.get("cpu_capacity", 0.0)),
+                "target_snr_db": float(network.get("target_snr_db", 6.0)),
+                "node_count": int(network.get("node_count", 5)),
+                "base_station_count": int(network.get("base_station_count", 1)),
             }
         )
     return rows

@@ -1,28 +1,87 @@
-@startuml
-start
+@startuml algorithm_logic
+skinparam dpi 300  # 提高图片分辨率
+skinparam defaultFontName "SimSun"  # 使用宋体，符合中文论文规范
+skinparam defaultFontSize 12  # 设置字体大小
 
-:输入 ResourceAllocationRequestV2;
-:读取 users / relations / network;
+skinparam sequenceMessageAlign center
+skinparam noteBackgroundColor #f0f0f0
 
-if (allocation_backend == legacy_experiment?) then (是)
-  :运行 6维PSO(3功率+3带宽);
-  :fitness = evaluate_legacy_vector + 语义指标奖励 - 约束惩罚;
-  :按切片映射下发到用户;
-else (否)
-  if (algorithm == pso?) then (是)
-    :运行在线PSO(_PSOAllocator);
-    :目标=效用最大化+公平性增强-时延/保真惩罚;
-  else (否)
-    :执行规则分配(weighted/equal/latency_first);
-  endif
-endif
+actor "管理员" as Admin
+actor "用户" as User
+participant "系统前端" as Frontend
+participant "系统后端" as Backend
+database "语义切片构建和分发模块" as SliceBuildDistModule
+database "切片与业务适配模块" as SliceAdaptModule
+database "资源管理与编排模块" as ResourceModule
+database "语义通信模块" as SemCommModule
 
-:计算 energy_cost = 1.8*compute + 45*power;
-if (超过能耗阈值?) then (是)
-  :按比例缩放 compute;
-endif
+== 阶段一：语义切片预配置 (系统初始化) ==
+Admin -> Frontend: 提交切片模板配置\n(编解码器/知识库/资源配额)
+activate Frontend
+Frontend -> Backend: 转发配置请求
+activate Backend
+Backend -> SliceBuildDistModule: 生成并存储切片实例
+activate SliceBuildDistModule
+SliceBuildDistModule --> Backend: 切片实例创建完成
+deactivate SliceBuildDistModule
+Backend --> Frontend: 配置生效确认
+deactivate Backend
+Frontend --> Admin: 展示配置状态
+deactivate Frontend
 
-:输出 allocations;
-:输出 used_resources / remaining_resources / timeline;
-stop
+== 阶段二：业务接入与服务部署 (控制面) ==
+User -> Frontend: 提交业务建立请求\n(领域类型/需求特征/QoS目标)
+activate Frontend
+Frontend -> Backend: 转发业务请求
+activate Backend
+
+Backend -> Backend: 解析业务语义特征
+note right of Backend: 提取领域类型与通信需求
+
+Backend -> SliceAdaptModule: 请求语义切片匹配
+activate SliceAdaptModule
+SliceAdaptModule -> SliceBuildDistModule: 获取可用切片实例列表
+activate SliceBuildDistModule
+SliceBuildDistModule --> SliceAdaptModule: 返回可用切片
+deactivate SliceBuildDistModule
+SliceAdaptModule -> SliceAdaptModule: 基于语义相似度计算匹配度
+SliceAdaptModule --> Backend: 返回最优切片实例
+deactivate SliceAdaptModule
+
+Backend -> ResourceModule: 发起资源联合分配请求
+activate ResourceModule
+ResourceModule -> ResourceModule: 多目标粒子群优化
+ResourceModule --> Backend: 返回资源分配方案
+deactivate ResourceModule
+
+Backend -> SemCommModule: 下发切片规则与资源配置\n(实例化语义通信通道)
+activate SemCommModule
+SemCommModule -> SemCommModule: 加载特定领域知识库\n与语义编解码模型
+SemCommModule --> Backend: 语义通信服务部署完成
+deactivate SemCommModule
+
+Backend --> Frontend: 返回业务接入成功/通道就绪信息
+deactivate Backend
+Frontend --> User: 提示服务已就绪，可开始传输数据
+deactivate Frontend
+
+== 阶段三：语义业务数据传输 (数据面) ==
+note over User, SemCommModule: 服务生命周期内，用户可多次、持续地发起数据传输
+
+User -> Frontend: 输入待传输的源端业务数据\n(如图像、文本、传感器数据)
+activate Frontend
+Frontend -> SemCommModule: 调用已实例化的语义通道进行数据传输
+activate SemCommModule
+
+note right of SemCommModule
+  依托共享知识库执行核心传输流程：
+end note
+SemCommModule -> SemCommModule: 1. 语义编码 (提取关键语义特征)
+SemCommModule -> SemCommModule: 2. 信道传输 (物理/逻辑信道传输)
+SemCommModule -> SemCommModule: 3. 语义重构 (接收端解码与恢复)
+
+SemCommModule --> Frontend: 返回目标端重构数据及实时监控指标\n(语义相似度/传输时延/实时能耗)
+deactivate SemCommModule
+Frontend --> User: 展示接收端结果及通信质量服务(QoS)报告
+deactivate Frontend
 @enduml

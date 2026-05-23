@@ -14,7 +14,8 @@ from app.models.schemas import (
     UserBusinessItem,
     UserResourceAllocation,
 )
-from app.services.semantic_service import CHANNEL_SCENARIOS, DEFAULT_CHANNEL_SCENARIO, semantic_metrics_for_user
+from app.services.deepsc_runtime_service import real_decode_for_user
+from app.services.semantic_service import OLD_NOISE_DBM, semantic_metrics_for_user
 
 
 SIM_THRESHOLD = 0.60
@@ -153,7 +154,6 @@ def evaluate(
                 "label": item.slice_id,
                 "power": item.power,
                 "bandwidth": item.bandwidth,
-                "compute": item.compute,
             }
             for item in allocations
         ],
@@ -162,7 +162,6 @@ def evaluate(
                 "label": slice_id,
                 "avg_fidelity": round(mean(slice_fidelity[slice_id]), 4),
                 "avg_delay_ms": round(mean(slice_delay[slice_id]), 4),
-                "compute": allocation_map.get(slice_id).compute if slice_id in allocation_map else 0.0,
             }
             for slice_id in sorted(slice_fidelity.keys())
         ],
@@ -184,12 +183,8 @@ def evaluate(
 def evaluate_performance(payload: PerformanceEvaluateRequest) -> PerformanceEvaluateResponse:
     users_map: Dict[str, UserBusinessItem] = {user.user_id: user for user in payload.users}
     relation_map: Dict[str, AdaptationRow] = {row.user_id: row for row in payload.relations}
-    scenario_profile = CHANNEL_SCENARIOS.get(
-        payload.network.channel_scenario,
-        CHANNEL_SCENARIOS[DEFAULT_CHANNEL_SCENARIO],
-    )
-    noise_dbm = float(scenario_profile["noise_dbm"])
-    distance_factor = float(scenario_profile["distance_factor"])
+    noise_dbm = OLD_NOISE_DBM
+    distance_factor = 1.0
     strategy = _normalize_strategy_name(payload.allocation_algorithm)
     user_count = len(payload.users)
 
@@ -201,14 +196,16 @@ def evaluate_performance(payload: PerformanceEvaluateRequest) -> PerformanceEval
         semantic = semantic_metrics_for_user(user, allocation, noise_dbm, distance_factor)
         relation = relation_map.get(user.user_id)
         similarity_score = float(relation.similarity_score) if relation is not None else 0.65
-        # 将“知识匹配 + 低SNR策略增益”统一注入 SS。
-        base_knowledge = 0.90 + 0.20 * max(0.0, min(1.0, similarity_score))
-        strategy_gain = _strategy_semantic_gain(strategy, semantic["snr_db"], similarity_score, user.requirement_type)
-        knowledge_factor = base_knowledge * strategy_gain
-        fidelity_value = max(0.0, min(1.0, float(semantic["fidelity"]) * knowledge_factor))
-
-        delay_factor = _strategy_delay_factor(strategy, semantic["snr_db"], user_count)
-        delay_value = max(0.0, float(semantic["delay_ms"]) * delay_factor)
+        decode = real_decode_for_user(user, allocation, payload.network, strategy)
+        knowledge_factor = max(0.0, min(1.0, similarity_score))
+        if bool(decode.get("decode_ok", False)):
+            fidelity_value = max(0.0, min(1.0, float(decode.get("token_match_rate", 0.0))))
+        else:
+            fidelity_value = max(0.0, min(1.0, float(semantic["fidelity"])))
+        delay_value = max(0.0, float(decode.get("delay_ms", semantic["delay_ms"])))
+        passed = bool(decode.get("pass", _service_pass(user.requirement_type, fidelity_value, delay_value)))
+        effective_ss = fidelity_value if passed else 0.0
+        s_se = effective_ss / max(float(user.payload_symbols), 1.0)
         user_metrics.append(
             {
                 "user_id": user.user_id,
@@ -217,19 +214,30 @@ def evaluate_performance(payload: PerformanceEvaluateRequest) -> PerformanceEval
                 "requirement_type": user.requirement_type,
                 "fidelity": fidelity_value,
                 "delay_ms": delay_value,
-                "snr_db": semantic["snr_db"],
+                "snr_db": float(decode.get("snr_db", semantic["snr_db"])),
                 "bandwidth": allocation.bandwidth,
                 "power": allocation.power,
-                "compute": allocation.compute,
-                "energy_cost": allocation.energy_cost,
                 "similarity_score": similarity_score,
                 "knowledge_factor": round(knowledge_factor, 4),
+                "pass": passed,
+                "s_se": round(s_se, 6),
+                "source_text": str(decode.get("source_text", "")),
+                "encoded_signal_shape": str(decode.get("encoded_signal_shape", "")),
+                "encoded_signal_preview": str(decode.get("encoded_signal_preview", "")),
+                "decoded_text": str(decode.get("decoded_text", "")),
+                "token_match_rate": float(decode.get("token_match_rate", fidelity_value)),
+                "sample_index": float(decode.get("sample_index", getattr(user, "sample_index", 0))),
+                "task_pkl": str(decode.get("task_pkl", user.task_pkl or "")),
+                "task_vocab": str(decode.get("task_vocab", user.task_vocab or "")),
+                "model_profile": str(decode.get("model_profile", "")),
+                "checkpoint_name": str(decode.get("checkpoint_name", "")),
+                "decode_error": str(decode.get("decode_error", "")),
             }
         )
 
     avg_fidelity = mean(metric["fidelity"] for metric in user_metrics) if user_metrics else 0.0
     avg_delay = mean(metric["delay_ms"] for metric in user_metrics) if user_metrics else 0.0
-    avg_energy = mean(metric["energy_cost"] for metric in user_metrics) if user_metrics else 0.0
+    avg_s_se = mean(metric["s_se"] for metric in user_metrics) if user_metrics else 0.0
 
     charts = {
         "fidelity_by_user": [
@@ -243,8 +251,6 @@ def evaluate_performance(payload: PerformanceEvaluateRequest) -> PerformanceEval
                 "label": metric["user_id"],
                 "bandwidth": float(metric["bandwidth"]),
                 "power": float(metric["power"]),
-                "compute": float(metric["compute"]),
-                "energy": float(metric["energy_cost"]),
             }
             for metric in user_metrics
         ],
@@ -254,7 +260,7 @@ def evaluate_performance(payload: PerformanceEvaluateRequest) -> PerformanceEval
         core_metrics={
             "avg_fidelity": round(avg_fidelity, 4),
             "avg_delay_ms": round(avg_delay, 4),
-            "avg_energy": round(avg_energy, 4),
+            "avg_s_se": round(avg_s_se, 5),
         },
         user_metrics=user_metrics,
         charts=charts,

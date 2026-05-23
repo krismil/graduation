@@ -12,7 +12,6 @@ class ServiceProfile(BaseModel):
     task_type: TaskType = "HF"
     semantic_nssai: float = Field(..., ge=0, le=100)
     request_bandwidth: float = Field(..., gt=0, description="MHz")
-    request_compute: float = Field(..., gt=0, description="Compute units")
     payload_symbols: int = Field(10, ge=1)
     distance_m: float = Field(3000, gt=0)
     base_similarity: float = Field(0.72, ge=0, le=1)
@@ -61,7 +60,6 @@ class SliceBuildResponse(BaseModel):
 class ResourceState(BaseModel):
     total_power: float = Field(1.0, gt=0)
     total_bandwidth: float = Field(2.0, gt=0)
-    total_compute: float = Field(100.0, gt=0)
     congestion_level: float = Field(0.0, ge=0, le=1)
 
 
@@ -69,7 +67,6 @@ class ResourceAllocationItem(BaseModel):
     slice_id: str
     power: float
     bandwidth: float
-    compute: float
 
 
 class OrchestrationRequest(BaseModel):
@@ -163,6 +160,7 @@ class UserBusinessItem(BaseModel):
     base_similarity: float = Field(0.72, ge=0, le=1)
     task_pkl: Optional[str] = None
     task_vocab: Optional[str] = None
+    sample_index: int = Field(0, ge=0)
 
 
 class BusinessConfig(BaseModel):
@@ -179,15 +177,16 @@ class BusinessConfigResponse(BaseModel):
 
 
 class NetworkConfig(BaseModel):
-    cpu_capacity: float = Field(100.0, gt=0)
-    compute_energy_threshold: float = Field(500.0, gt=0)
     total_bandwidth: float = Field(2.0, gt=0)
     total_power: float = Field(1.0, gt=0)
-    channel_scenario: str = "snr_6"
+    target_snr_db: float = Field(6.0, ge=-20.0, le=30.0)
+    node_count: int = Field(5, ge=1)
+    base_station_count: int = Field(1, ge=1)
+    channel_scenario: Optional[str] = None
 
 
 class NetworkConfigResponse(BaseModel):
-    network: Dict[str, Union[str, float]]
+    network: Dict[str, Union[float, int, str]]
 
 
 class KnowledgeBaseConfig(BaseModel):
@@ -251,8 +250,6 @@ class UserResourceAllocation(BaseModel):
     slice_id: str
     bandwidth: float
     power: float
-    compute: float
-    energy_cost: float
 
 
 class ResourceAllocationRequestV2(BaseModel):

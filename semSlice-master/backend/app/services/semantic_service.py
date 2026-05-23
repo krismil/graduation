@@ -17,7 +17,10 @@ from app.models.schemas import (
 
 
 RANDOM = random.Random(2026)
-DEFAULT_CHANNEL_SCENARIO = "snr_6"
+OLD_NOISE_DBM = -114.45
+OLD_DISTANCE_M = 3000.0
+DEFAULT_TARGET_SNR_DB = 6.0
+DEFAULT_CHANNEL_SCENARIO = "target_snr"
 CHANNEL_SCENARIOS = {
     # 按目标 SNR 离散配置（-6 dB 到 12 dB）
     "snr_m6": {"noise_dbm": -104.5, "distance_factor": 1.15, "delay_ref_ms": 1.40},
@@ -25,7 +28,7 @@ CHANNEL_SCENARIOS = {
     "snr_m2": {"noise_dbm": -108.5, "distance_factor": 1.15, "delay_ref_ms": 1.20},
     "snr_0": {"noise_dbm": -110.5, "distance_factor": 1.15, "delay_ref_ms": 1.10},
     "snr_2": {"noise_dbm": -112.5, "distance_factor": 1.15, "delay_ref_ms": 1.00},
-    "snr_4": {"noise_dbm": -114.5, "distance_factor": 1.15, "delay_ref_ms": 0.90},
+    "snr_4": {"noise_dbm": OLD_NOISE_DBM, "distance_factor": 1.0, "delay_ref_ms": 0.90},
     "snr_6": {"noise_dbm": -116.5, "distance_factor": 1.15, "delay_ref_ms": 0.82},
     "snr_8": {"noise_dbm": -118.5, "distance_factor": 1.15, "delay_ref_ms": 0.76},
     "snr_10": {"noise_dbm": -120.5, "distance_factor": 1.15, "delay_ref_ms": 0.70},
@@ -78,13 +81,11 @@ def process_services(services: List[ServiceProfile], noise_dbm: float) -> Semant
         return SemanticProcessResponse(items=[], summary={"avg_fidelity": 0.0, "avg_delay_ms": 0.0, "avg_snr_db": 0.0})
 
     total_request_bw = sum(service.request_bandwidth for service in services)
-    total_request_compute = sum(service.request_compute for service in services)
-
     results: List[SemanticResultItem] = []
     for service in services:
         encoder_level = select_encoder_level(service.semantic_nssai)
 
-        power_share = max(0.02, min(0.5, service.request_compute / max(total_request_compute, 1e-9)))
+        power_share = max(0.02, min(0.5, service.request_bandwidth / max(total_request_bw, 1e-9)))
         bandwidth_share = max(0.05, min(1.5, 2.0 * service.request_bandwidth / max(total_request_bw, 1e-9)))
 
         snr_db = compute_snr_db(
@@ -152,6 +153,7 @@ def _auto_users_from_business(config: BusinessConfig) -> List[UserBusinessItem]:
                 base_similarity=base_similarity,
                 task_pkl=task_pkl,
                 task_vocab=task_vocab,
+                sample_index=idx,
             )
         )
     return users
@@ -172,6 +174,7 @@ def build_business_config(config: BusinessConfig) -> BusinessConfigResponse:
                 base_similarity=_resolve_base_similarity(user.task_vocab, user.task_pkl, user.base_similarity),
                 task_pkl=user.task_pkl,
                 task_vocab=user.task_vocab,
+                sample_index=int(getattr(user, "sample_index", 0)),
             )
         )
 
@@ -185,15 +188,14 @@ def build_business_config(config: BusinessConfig) -> BusinessConfigResponse:
 
 
 def build_network_config(network: NetworkConfig) -> NetworkConfigResponse:
-    profile = CHANNEL_SCENARIOS.get(network.channel_scenario, CHANNEL_SCENARIOS[DEFAULT_CHANNEL_SCENARIO])
     normalized = {
-        "cpu_capacity": float(network.cpu_capacity),
-        "compute_energy_threshold": float(network.compute_energy_threshold),
         "total_bandwidth": float(network.total_bandwidth),
         "total_power": float(network.total_power),
-        "channel_scenario": network.channel_scenario,
-        "noise_dbm": profile["noise_dbm"],
-        "distance_factor": profile["distance_factor"],
+        "target_snr_db": float(network.target_snr_db),
+        "node_count": int(network.node_count),
+        "base_station_count": int(network.base_station_count),
+        "noise_dbm": OLD_NOISE_DBM,
+        "distance_m": OLD_DISTANCE_M,
     }
     return NetworkConfigResponse(network=normalized)
 
@@ -207,11 +209,16 @@ def semantic_metrics_for_user(
     snr_db = compute_snr_db(
         power=max(1e-6, allocation.power),
         bandwidth_mhz=max(1e-6, allocation.bandwidth),
-        distance_m=max(1.0, user.distance_m * distance_factor),
+        distance_m=OLD_DISTANCE_M,
         noise_dbm=noise_dbm,
     )
     delay_ms = transmit_delay_ms(user.payload_symbols, 30, max(1e-6, allocation.bandwidth), snr_db)
-    encoder_level = 1 if allocation.compute >= 0.8 else 2 if allocation.compute >= 0.35 else 3
+    encoder_level = 1
+    slice_token = str(allocation.slice_id or "").lower()
+    if slice_token.endswith("2") or "90" in slice_token:
+        encoder_level = 2
+    elif slice_token.endswith("3") or "80" in slice_token:
+        encoder_level = 3
     fidelity = _estimate_fidelity(user.base_similarity, snr_db, encoder_level, delay_ms)
     return {
         "snr_db": round(snr_db, 4),
